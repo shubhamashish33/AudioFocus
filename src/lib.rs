@@ -1,3 +1,4 @@
+pub mod arbitration;
 pub mod com;
 pub mod error;
 pub mod events;

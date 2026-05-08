@@ -1,3 +1,4 @@
+mod arbitration;
 mod app;
 mod com;
 mod error;
