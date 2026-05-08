@@ -5,6 +5,7 @@ mod events;
 mod logging;
 mod media_events;
 mod media_source;
+mod non_smtc;
 mod process;
 mod registry;
 mod shutdown;

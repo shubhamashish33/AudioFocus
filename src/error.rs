@@ -18,4 +18,7 @@ pub enum AudioFocusError {
 
     #[error("SMTC error: {0}")]
     Smtc(String),
+
+    #[error("non-SMTC controller error: {0}")]
+    NonSmtc(String),
 }
