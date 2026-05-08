@@ -15,4 +15,7 @@ pub enum AudioFocusError {
 
     #[error("thread error: {0}")]
     Thread(String),
+
+    #[error("SMTC error: {0}")]
+    Smtc(String),
 }

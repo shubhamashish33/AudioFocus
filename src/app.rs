@@ -2,7 +2,7 @@ use std::{thread, time::Duration};
 
 use crate::{
     com::MtaApartment, error::Result, events::AudioSessionEvent, registry::AudioSessionRegistry,
-    shutdown::ShutdownSignal, wasapi::WasapiSessionMonitor,
+    shutdown::ShutdownSignal, smtc::SmtcRuntime, wasapi::WasapiSessionMonitor,
 };
 
 #[derive(Debug)]
@@ -23,11 +23,14 @@ impl AudioFocusMonitor {
             .name("wasapi-session-monitor".to_string())
             .spawn(move || run_wasapi_worker(worker_shutdown, polling_interval))
             .map_err(|error| crate::error::AudioFocusError::Thread(error.to_string()))?;
+        let smtc_runtime = SmtcRuntime::start(shutdown.clone())?;
+        let _smtc_controller = smtc_runtime.controller();
 
         while !shutdown.is_requested() {
             thread::sleep(Duration::from_millis(100));
         }
 
+        smtc_runtime.join()?;
         worker.join().map_err(|_| {
             crate::error::AudioFocusError::Thread("WASAPI worker panicked".to_string())
         })?

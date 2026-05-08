@@ -3,8 +3,12 @@ mod com;
 mod error;
 mod events;
 mod logging;
+mod media_events;
+mod media_source;
+mod process;
 mod registry;
 mod shutdown;
+mod smtc;
 mod wasapi;
 
 use std::time::Duration;
@@ -17,8 +21,8 @@ fn main() -> Result<()> {
     let _logging = logging::init()?;
     tracing::info!(
         app = "AudioFocus",
-        phase = 1,
-        "starting WASAPI audio session monitor"
+        phase = 2,
+        "starting AudioFocus WASAPI and SMTC monitors"
     );
 
     let shutdown = ShutdownSignal::new();
