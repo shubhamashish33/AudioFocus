@@ -125,7 +125,7 @@ fn media_source_from_process(
     }
 }
 
-fn enumerate_processes() -> Vec<ProcessSnapshot> {
+pub fn enumerate_processes() -> Vec<ProcessSnapshot> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     let Ok(snapshot) = snapshot else {
         tracing::warn!("failed to create process snapshot for SMTC resolution");

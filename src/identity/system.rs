@@ -1,8 +1,9 @@
 use std::sync::Arc;
-use crate::media_source::{MediaSource, MediaSourceId, MediaSourceKind, ProcessIdentity};
+use crate::media_source::{MediaSource, MediaSourceId, MediaSourceKind};
 use crate::events::AudioSessionSnapshot;
 use super::*;
 
+#[derive(Debug)]
 pub struct IdentitySystem {
     registry: Arc<SourceRegistry>,
     manager: IdentityManager,
@@ -44,9 +45,9 @@ impl IdentitySystem {
         
         let mut source = MediaSource {
             id: self.manager.generate_id(&process, &kind, &aumid),
+            capability: self.classifier.classify(&process.executable_name, &kind),
             kind,
             source_type: crate::media_source::SourceType::NonSmtc,
-            capability: self.classifier.classify(&process.executable_name, &kind),
             source_app_user_model_id: aumid,
             process: Some(process),
         };

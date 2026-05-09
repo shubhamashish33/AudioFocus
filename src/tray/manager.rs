@@ -1,23 +1,24 @@
 use std::sync::Arc;
-use windows::core::{w, PCWSTR};
+use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::GetCursorPos;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NIF_ICON, NIF_MESSAGE, NIF_TIP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
-    PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HMENU, HWND_MESSAGE, MSG,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, WINDOW_EX_STYLE, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK,
-    WM_RBUTTONUP, WM_USER, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW,
+    GetWindowLongPtrW, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
+    GWLP_USERDATA, HMENU, HWND_MESSAGE, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WINDOW_EX_STYLE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_TIMER, WM_USER,
+    WNDCLASSW, WS_OVERLAPPED,
 };
 
-use crate::tray::icons::{load_state_icon, TrayIconState};
+use crate::tray::icons::load_state_icon;
 use crate::tray::menu::{create_tray_menu, IDM_OPEN_LOGS, IDM_QUIT, IDM_RESTART, IDM_TOGGLE_ACTIVE};
 use crate::tray::runtime::RuntimeHost;
 
 const WM_TRAY_ICON: u32 = WM_USER + 1;
+const ID_TIMER_MAINTENANCE: usize = 1;
 
 pub struct TrayManager {
     runtime: Arc<RuntimeHost>,
@@ -47,24 +48,25 @@ impl TrayManager {
                 WINDOW_EX_STYLE::default(),
                 window_class,
                 w!("AudioFocus"),
+                WS_OVERLAPPED,
+                0,
+                0,
+                0,
+                0,
                 HWND_MESSAGE,
-                0,
-                0,
-                0,
-                0,
-                HWND::default(),
                 HMENU::default(),
                 instance,
                 Some(self as *const _ as *const _),
             )
-        };
+        }?;
 
-        if hwnd.0 == 0 {
+        if hwnd.0 == std::ptr::null_mut() {
             return Err(crate::error::AudioFocusError::Win32(
                 "Failed to create tray window".to_string(),
             ));
         }
 
+        unsafe { SetTimer(hwnd, ID_TIMER_MAINTENANCE, 5000, None) };
         self.add_tray_icon(hwnd);
 
         let mut msg = MSG::default();
@@ -74,6 +76,7 @@ impl TrayManager {
             }
         }
 
+        let _ = unsafe { KillTimer(hwnd, ID_TIMER_MAINTENANCE) };
         self.remove_tray_icon(hwnd);
         Ok(())
     }
@@ -87,7 +90,7 @@ impl TrayManager {
         copy_u16_slice(&mut nid.szTip, "AudioFocus");
 
         unsafe {
-            Shell_NotifyIconW(NIM_ADD, &nid);
+            let _ = Shell_NotifyIconW(NIM_ADD, &nid);
         }
     }
 
@@ -96,14 +99,14 @@ impl TrayManager {
         nid.uFlags = NIF_ICON;
         nid.hIcon = load_state_icon(self.runtime.state());
         unsafe {
-            Shell_NotifyIconW(NIM_MODIFY, &nid);
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
         }
     }
 
     fn remove_tray_icon(&self, hwnd: HWND) {
         let nid = self.create_nid(hwnd);
         unsafe {
-            Shell_NotifyIconW(NIM_DELETE, &nid);
+            let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
         }
     }
 
@@ -125,6 +128,15 @@ unsafe extern "system" fn window_proc(
     match msg {
         WM_DESTROY => {
             PostQuitMessage(0);
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            if wparam.0 == ID_TIMER_MAINTENANCE {
+                if let Some(tm) = get_tray_manager(hwnd) {
+                    tm.runtime.run_maintenance();
+                    tm.update_tray_icon(hwnd);
+                }
+            }
             LRESULT(0)
         }
         WM_TRAY_ICON => {
@@ -162,7 +174,7 @@ unsafe extern "system" fn window_proc(
                         tm.runtime.open_logs_folder();
                     }
                     IDM_QUIT => {
-                        PostMessageW(hwnd, WM_DESTROY, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(hwnd, WM_DESTROY, WPARAM(0), LPARAM(0));
                     }
                     _ => {}
                 }
@@ -170,7 +182,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         _ => {
-            if msg == windows::Win32::UI::WindowsAndMessaging::WM_CREATE {
+            if msg == WM_CREATE {
                 let create_struct = lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW;
                 let tm = (*create_struct).lpCreateParams as isize;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, tm);
@@ -192,12 +204,12 @@ fn get_tray_manager(hwnd: HWND) -> Option<&'static TrayManager> {
 impl TrayManager {
     fn show_menu(&self, hwnd: HWND) {
         let mut pos = Default::default();
-        unsafe { GetCursorPos(&mut pos) };
+        unsafe { let _ = GetCursorPos(&mut pos); };
 
         let menu = create_tray_menu(self.runtime.is_active());
         unsafe {
             SetForegroundWindow(hwnd);
-            TrackPopupMenu(
+            let _ = TrackPopupMenu(
                 menu,
                 TPM_BOTTOMALIGN | TPM_LEFTALIGN,
                 pos.x,
@@ -206,7 +218,7 @@ impl TrayManager {
                 hwnd,
                 None,
             );
-            DestroyMenu(menu);
+            let _ = DestroyMenu(menu);
         }
     }
 }

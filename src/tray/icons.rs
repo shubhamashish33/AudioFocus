@@ -1,5 +1,5 @@
 use windows::Win32::UI::WindowsAndMessaging::{
-    LoadIconW, HICON, IDI_APPLICATION, IDI_ERROR, IDI_SHIELD, IDI_WARNING,
+    LoadIconW, HICON, IDI_APPLICATION, IDI_ERROR, IDI_SHIELD,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

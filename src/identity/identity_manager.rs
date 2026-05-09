@@ -1,6 +1,7 @@
 use crate::media_source::{MediaSourceId, MediaSourceKind, ProcessIdentity, normalize_component};
 use crate::identity::source_classifier::SourceClassifier;
 
+#[derive(Debug)]
 pub struct IdentityManager {
     classifier: SourceClassifier,
 }

@@ -17,7 +17,6 @@ impl WindowHandle {
 #[derive(Clone, Debug)]
 pub struct WindowCandidate {
     pub handle: WindowHandle,
-    pub process_id: u32,
     pub title: String,
     pub class_name: String,
     pub rect: Option<RECT>,
@@ -30,9 +29,8 @@ pub fn enumerate_top_level_windows_for_process(process_id: u32) -> Vec<WindowCan
         candidates: Vec::new(),
     };
 
-    let lparam = LPARAM((&mut context as *mut EnumContext) as isize);
-    if let Err(error) = unsafe { EnumWindows(Some(enum_windows_proc), lparam) } {
-        tracing::warn!(%error, process_id, "failed to enumerate top-level windows");
+    unsafe {
+        let _ = EnumWindows(Some(enum_windows_proc), LPARAM(&mut context as *mut _ as isize));
     }
 
     context.candidates
@@ -45,19 +43,22 @@ struct EnumContext {
 
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let context = &mut *(lparam.0 as *mut EnumContext);
-    let mut window_process_id = 0u32;
-    unsafe {
-        GetWindowThreadProcessId(hwnd, Some(&mut window_process_id));
-    }
 
-    if window_process_id == context.process_id {
+    let mut process_id = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+
+    if process_id == context.process_id {
+        let handle = WindowHandle(hwnd.0 as isize);
+        let title = get_window_title(hwnd);
+        let class_name = get_window_class(hwnd);
+        let rect = get_window_rect(hwnd);
         let z_order = context.candidates.len();
+
         context.candidates.push(WindowCandidate {
-            handle: WindowHandle(hwnd.0 as isize),
-            process_id: window_process_id,
-            title: window_text(hwnd),
-            class_name: class_name(hwnd),
-            rect: window_rect(hwnd),
+            handle,
+            title,
+            class_name,
+            rect,
             z_order,
         });
     }
@@ -65,26 +66,27 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     BOOL(1)
 }
 
-fn window_text(hwnd: HWND) -> String {
-    let mut buffer = vec![0u16; 512];
-    let length = unsafe { GetWindowTextW(hwnd, &mut buffer) };
-    if length <= 0 {
-        return String::new();
+fn get_window_title(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 512];
+    let len = unsafe { GetWindowTextW(hwnd, &mut buffer) };
+    if len > 0 {
+        String::from_utf16_lossy(&buffer[..len as usize])
+    } else {
+        String::new()
     }
-    String::from_utf16_lossy(&buffer[..length as usize])
 }
 
-fn class_name(hwnd: HWND) -> String {
-    let mut buffer = vec![0u16; 256];
-    let length = unsafe { GetClassNameW(hwnd, &mut buffer) };
-    if length <= 0 {
-        return String::new();
+fn get_window_class(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 256];
+    let len = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    if len > 0 {
+        String::from_utf16_lossy(&buffer[..len as usize])
+    } else {
+        String::new()
     }
-    String::from_utf16_lossy(&buffer[..length as usize])
 }
 
-fn window_rect(hwnd: HWND) -> Option<RECT> {
+fn get_window_rect(hwnd: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
-    unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
-    Some(rect)
+    unsafe { GetWindowRect(hwnd, &mut rect) }.ok().map(|_| rect)
 }

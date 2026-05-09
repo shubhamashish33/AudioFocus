@@ -3,6 +3,7 @@ use crate::identity::source_registry::SourceRegistry;
 use crate::process::enumerate_processes;
 use crate::media_source::MediaSourceId;
 
+#[derive(Debug)]
 pub struct StaleSourceCollector {
     registry: std::sync::Arc<SourceRegistry>,
 }

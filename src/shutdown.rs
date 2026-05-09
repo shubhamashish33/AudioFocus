@@ -28,4 +28,8 @@ impl ShutdownSignal {
     pub fn is_requested(&self) -> bool {
         self.requested.load(Ordering::SeqCst)
     }
+
+    pub fn request_shutdown(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+    }
 }

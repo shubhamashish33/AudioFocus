@@ -1,5 +1,6 @@
+use windows::core::w;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, HMENU, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    AppendMenuW, CreatePopupMenu, HMENU, MF_CHECKED, MF_SEPARATOR, MF_STRING,
     MF_UNCHECKED,
 };
 
@@ -18,12 +19,12 @@ pub fn create_tray_menu(active: bool) -> HMENU {
     };
 
     unsafe {
-        let _ = AppendMenuW(menu, toggle_flags, IDM_TOGGLE_ACTIVE as usize, "Active");
+        let _ = AppendMenuW(menu, toggle_flags, IDM_TOGGLE_ACTIVE as usize, w!("Active"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, IDM_RESTART as usize, "Restart AudioFocus");
-        let _ = AppendMenuW(menu, MF_STRING, IDM_OPEN_LOGS as usize, "Open Logs Folder");
+        let _ = AppendMenuW(menu, MF_STRING, IDM_RESTART as usize, w!("Restart AudioFocus"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_OPEN_LOGS as usize, w!("Open Logs Folder"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, IDM_QUIT as usize, "Quit");
+        let _ = AppendMenuW(menu, MF_STRING, IDM_QUIT as usize, w!("Quit"));
     }
 
     menu

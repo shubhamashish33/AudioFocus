@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    arbitration::ArbitrationHandle, error::AudioFocusError, identity::IdentitySystem,
-    shutdown::ShutdownSignal,
+    arbitration::ArbitrationHandle, error::AudioFocusError, hardening::Watchdog,
+    identity::IdentitySystem, shutdown::ShutdownSignal,
 };
 
 use super::{
@@ -24,9 +24,10 @@ impl SmtcRuntime {
         shutdown: ShutdownSignal,
         identity_system: Arc<IdentitySystem>,
         arbitration: ArbitrationHandle,
+        watchdog: Arc<Watchdog>,
     ) -> crate::error::Result<Self> {
         let (sender, receiver) = mpsc::channel::<SmtcWorkerMessage>();
-        Self::start_with_channel(shutdown, identity_system, arbitration, sender, receiver)
+        Self::start_with_channel(shutdown, identity_system, arbitration, sender, receiver, watchdog)
     }
 
     pub fn start_with_channel(
@@ -35,12 +36,13 @@ impl SmtcRuntime {
         arbitration: ArbitrationHandle,
         sender: mpsc::Sender<SmtcWorkerMessage>,
         receiver: mpsc::Receiver<SmtcWorkerMessage>,
+        watchdog: Arc<Watchdog>,
     ) -> crate::error::Result<Self> {
-        let controller = SmtcTransportController::new(sender);
+        let controller = SmtcTransportController::new(sender.clone());
         let worker = thread::Builder::new()
             .name("smtc-session-monitor".to_string())
             .spawn(move || {
-                run_smtc_worker(shutdown, sender, receiver, identity_system, arbitration)
+                run_smtc_worker(shutdown, sender, receiver, identity_system, arbitration, watchdog)
             })
             .map_err(|error| AudioFocusError::Thread(error.to_string()))?;
 

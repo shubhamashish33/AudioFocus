@@ -9,6 +9,7 @@ use crate::media_source::{MediaSource, MediaSourceId};
 
 pub use controller::{SmtcTransportController, TransportAction, TransportResult};
 pub use manager::SmtcRuntime;
+pub use watcher::SmtcWorkerMessage;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SmtcSessionKey {

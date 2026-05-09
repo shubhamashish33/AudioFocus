@@ -11,6 +11,7 @@ use std::{
 
 use crate::{
     error::{AudioFocusError, Result},
+    hardening::EventStormProtector,
     media_events::MediaEvent,
     media_source::{MediaSource, MediaSourceId},
     non_smtc::{NonSmtcPauseController, RetryConfig},
@@ -235,6 +236,7 @@ struct ArbitrationWorker {
     sender: Sender<ArbitrationMessage>,
     snapshot: Arc<Mutex<ArbitrationSnapshot>>,
     enabled: Arc<AtomicBool>,
+    storm_protector: EventStormProtector,
     state: ArbitrationState,
     debounce: DebounceCoordinator,
     suppression: SuppressionWindows,
@@ -263,6 +265,7 @@ impl ArbitrationWorker {
             sender,
             snapshot,
             enabled,
+            storm_protector: EventStormProtector::new(Duration::from_secs(1), 50),
             state: ArbitrationState::new(),
             recently_promoted: HashMap::new(),
             pending_pause_generations: HashSet::new(),
@@ -280,6 +283,10 @@ impl ArbitrationWorker {
     }
 
     fn handle_event(&mut self, event: ArbitrationEvent) {
+        if !self.storm_protector.check_and_record() {
+            return;
+        }
+
         let generation_id = self.state.next_generation();
         let event_name = event.name();
 

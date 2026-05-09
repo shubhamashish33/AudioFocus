@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use windows::{
-    core::PWSTR,
+    core::{Interface, PWSTR},
     Win32::{
         Media::Audio::{
             eConsole, eRender, AudioSessionState, AudioSessionStateActive,

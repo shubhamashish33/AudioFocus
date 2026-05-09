@@ -9,6 +9,7 @@ use crate::{
     com::MtaApartment,
     error::Result,
     events::AudioSessionEvent,
+    hardening::{panic::spawn_safe, Watchdog, DiagnosticsCollector},
     identity::IdentitySystem,
     non_smtc::NonSmtcPauseController,
     registry::AudioSessionRegistry,
@@ -26,6 +27,7 @@ pub struct AudioFocusRuntime {
     arbitration: Option<ArbitrationEngine>,
     smtc_runtime: SmtcRuntime,
     wasapi_worker: thread::JoinHandle<Result<()>>,
+    pub diagnostics: DiagnosticsCollector,
 }
 
 impl AudioFocusMonitor {
@@ -33,13 +35,13 @@ impl AudioFocusMonitor {
         Self { polling_interval }
     }
 
-    pub fn start(&self, shutdown: ShutdownSignal) -> Result<AudioFocusRuntime> {
+    pub fn start(&self, shutdown: ShutdownSignal, watchdog: Arc<Watchdog>) -> Result<AudioFocusRuntime> {
         let polling_interval = self.polling_interval;
         let identity_system = Arc::new(IdentitySystem::new());
 
         let (smtc_sender, smtc_receiver) = mpsc::channel::<SmtcWorkerMessage>();
         let smtc_controller = crate::smtc::SmtcTransportController::new(smtc_sender.clone());
-        let non_smtc_controller = NonSmtcPauseController::new();
+        let non_smtc_controller = NonSmtcPauseController::start(shutdown.clone())?;
 
         let controllers = ControllerRegistry::new()
             .with_smtc(smtc_controller)
@@ -50,34 +52,36 @@ impl AudioFocusMonitor {
             controllers,
         )?;
 
+        let smtc_watchdog = Arc::clone(&watchdog);
         let smtc_runtime = SmtcRuntime::start_with_channel(
             shutdown.clone(),
             Arc::clone(&identity_system),
             arbitration.handle(),
             smtc_sender,
             smtc_receiver,
+            smtc_watchdog,
         )?;
 
         let wasapi_identity = Arc::clone(&identity_system);
         let wasapi_arbitration = arbitration.handle();
         let wasapi_shutdown = shutdown.clone();
-
-        let wasapi_worker = thread::Builder::new()
-            .name("wasapi-session-monitor".to_string())
-            .spawn(move || {
-                run_wasapi_worker(
-                    wasapi_shutdown,
-                    polling_interval,
-                    wasapi_identity,
-                    wasapi_arbitration,
-                )
-            })
-            .map_err(|error| crate::error::AudioFocusError::Thread(error.to_string()))?;
+        let wasapi_watchdog = Arc::clone(&watchdog);
+        
+        let wasapi_worker = spawn_safe("wasapi-session-monitor".to_string(), move || {
+            run_wasapi_worker(
+                wasapi_shutdown,
+                polling_interval,
+                wasapi_identity,
+                wasapi_arbitration,
+                wasapi_watchdog,
+            )
+        });
 
         Ok(AudioFocusRuntime {
             arbitration: Some(arbitration),
             smtc_runtime,
             wasapi_worker,
+            diagnostics: DiagnosticsCollector::new(identity_system.registry()),
         })
     }
 }
@@ -104,12 +108,15 @@ fn run_wasapi_worker(
     polling_interval: Duration,
     identity_system: Arc<IdentitySystem>,
     arbitration: crate::arbitration::ArbitrationHandle,
+    watchdog: Arc<Watchdog>,
 ) -> Result<()> {
     let _com = MtaApartment::initialize()?;
     let mut monitor = WasapiSessionMonitor::from_default_render_endpoint()?;
     let mut registry = AudioSessionRegistry::new(identity_system.clone());
 
     while !shutdown.is_requested() {
+        watchdog.heartbeat("wasapi-session-monitor");
+        
         match monitor.snapshot_sessions() {
             Ok(snapshots) => {
                 let events = registry.reconcile(snapshots);

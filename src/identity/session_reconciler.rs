@@ -1,7 +1,8 @@
-use crate::media_source::{MediaSource, MediaSourceId, SourceType, MediaCapability};
+use crate::media_source::{MediaSource, SourceType};
 use crate::identity::source_registry::SourceRegistry;
 use crate::identity::identity_manager::IdentityManager;
 
+#[derive(Debug)]
 pub struct SessionReconciler {
     registry: std::sync::Arc<SourceRegistry>,
     manager: IdentityManager,

@@ -17,6 +17,7 @@ use windows::{
 use crate::{
     arbitration::ArbitrationHandle,
     error::{AudioFocusError, Result},
+    hardening::Watchdog,
     identity::IdentitySystem,
     media_events::{MediaEvent, MediaMetadata, PlaybackState},
     media_source::{MediaSource, MediaSourceId},
@@ -54,6 +55,7 @@ pub fn run_smtc_worker(
     receiver: mpsc::Receiver<SmtcWorkerMessage>,
     identity_system: Arc<IdentitySystem>,
     arbitration: ArbitrationHandle,
+    watchdog: Arc<Watchdog>,
 ) -> Result<()> {
     let _apartment = WinRtMtaApartment::initialize()?;
     let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.get()?;
@@ -64,10 +66,11 @@ pub fn run_smtc_worker(
     state.emit_current_session_changed()?;
 
     while !shutdown.is_requested() {
+        watchdog.heartbeat("smtc-session-monitor");
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(message) => state.handle_message(message)?,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
 
@@ -208,8 +211,8 @@ impl SmtcWatcherState {
             if let Some(removed) = self.sessions.remove(&key) {
                 self.source_to_key.remove(&removed.source.id);
                 self.emit(MediaEvent::MediaStopped {
-                    source: removed.source,
-                    metadata: removed.metadata,
+                    source: removed.source.clone(),
+                    metadata: removed.metadata.clone(),
                 });
             }
         }
@@ -286,9 +289,12 @@ impl SmtcWatcherState {
         }
 
         tracked.metadata = metadata.clone();
+        let source = tracked.source.clone();
+        let metadata_cloned = metadata.clone();
+        
         self.emit(MediaEvent::MediaMetadataChanged {
-            source: tracked.source.clone(),
-            metadata,
+            source,
+            metadata: metadata_cloned,
         });
         Ok(())
     }

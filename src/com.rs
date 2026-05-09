@@ -8,7 +8,7 @@ pub struct MtaApartment;
 impl MtaApartment {
     pub fn initialize() -> Result<Self> {
         unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED)?;
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
         }
         Ok(Self)
     }

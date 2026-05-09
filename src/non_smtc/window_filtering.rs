@@ -64,7 +64,7 @@ fn base_window_filter(hwnd: windows::Win32::Foundation::HWND) -> bool {
         return false;
     }
 
-    let owner = unsafe { GetWindow(hwnd, GW_OWNER) };
+    let owner = unsafe { GetWindow(hwnd, GW_OWNER) }.unwrap_or_default();
     if owner.0 != std::ptr::null_mut() {
         return false;
     }
