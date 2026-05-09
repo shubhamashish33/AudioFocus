@@ -104,6 +104,9 @@ impl RuntimeHost {
     }
 
     pub fn run_maintenance(&self) {
+        if let Some(runtime) = self.runtime.lock().unwrap().as_ref() {
+            runtime.cleanup_stale();
+        }
         self.recovery.monitor_and_recover(self);
     }
 }

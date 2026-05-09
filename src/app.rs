@@ -27,6 +27,7 @@ pub struct AudioFocusRuntime {
     arbitration: Option<ArbitrationEngine>,
     smtc_runtime: SmtcRuntime,
     wasapi_worker: thread::JoinHandle<Result<()>>,
+    identity_system: Arc<IdentitySystem>,
     pub diagnostics: DiagnosticsCollector,
 }
 
@@ -81,6 +82,7 @@ impl AudioFocusMonitor {
             arbitration: Some(arbitration),
             smtc_runtime,
             wasapi_worker,
+            identity_system: Arc::clone(&identity_system),
             diagnostics: DiagnosticsCollector::new(identity_system.registry()),
         })
     }
@@ -89,6 +91,10 @@ impl AudioFocusMonitor {
 impl AudioFocusRuntime {
     pub fn arbitration(&self) -> &ArbitrationEngine {
         self.arbitration.as_ref().unwrap()
+    }
+
+    pub fn cleanup_stale(&self) {
+        self.identity_system.cleanup_stale();
     }
 
     pub fn shutdown(mut self) -> Result<()> {

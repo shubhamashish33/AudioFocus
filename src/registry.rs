@@ -91,9 +91,6 @@ impl AudioSessionRegistry {
             })
             .collect();
             
-        // Trigger stale cleanup in identity system
-        self.identity_system.cleanup_stale();
-            
         events
     }
 
