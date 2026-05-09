@@ -129,9 +129,11 @@ fn run_wasapi_worker(
                 for event in events {
                     log_event(&event);
                     if let Some(source) = identity_system.resolve_wasapi_session(event.snapshot()) {
-                        let _ = arbitration.submit(crate::arbitration::ArbitrationEvent::Media(
-                            media_event_from_session(&event, source),
-                        ));
+                        if let Some(media_event) = media_event_from_session(&event, source) {
+                            let _ = arbitration.submit(crate::arbitration::ArbitrationEvent::Media(
+                                media_event,
+                            ));
+                        }
                     }
                 }
                 tracing::debug!(tracked_sessions = registry.len(), "registry reconciled");
@@ -173,23 +175,33 @@ fn log_event(event: &AudioSessionEvent) {
 fn media_event_from_session(
     event: &AudioSessionEvent,
     source: crate::media_source::MediaSource,
-) -> crate::media_events::MediaEvent {
+) -> Option<crate::media_events::MediaEvent> {
     match event {
-        AudioSessionEvent::SessionStarted(_) | AudioSessionEvent::SessionBecameActive(_) => {
-            crate::media_events::MediaEvent::MediaStarted {
-                source,
-                metadata: Default::default(),
+        AudioSessionEvent::SessionStarted(snapshot) => {
+            if snapshot.is_audible() {
+                Some(crate::media_events::MediaEvent::MediaStarted {
+                    source,
+                    metadata: Default::default(),
+                })
+            } else {
+                None
             }
         }
-        AudioSessionEvent::SessionStopped(_) => crate::media_events::MediaEvent::MediaStopped {
-            source,
-            metadata: Default::default(),
-        },
-        AudioSessionEvent::SessionBecameInactive(_) => {
-            crate::media_events::MediaEvent::MediaPaused {
+        AudioSessionEvent::SessionBecameActive(_) => {
+            Some(crate::media_events::MediaEvent::MediaStarted {
                 source,
                 metadata: Default::default(),
-            }
+            })
+        }
+        AudioSessionEvent::SessionStopped(_) => Some(crate::media_events::MediaEvent::MediaStopped {
+            source,
+            metadata: Default::default(),
+        }),
+        AudioSessionEvent::SessionBecameInactive(_) => {
+            Some(crate::media_events::MediaEvent::MediaPaused {
+                source,
+                metadata: Default::default(),
+            })
         }
     }
 }

@@ -101,7 +101,7 @@ struct SmtcWatcherState {
     sink: Weak<SmtcMessageSink>,
     manager_tokens: ManagerEventTokens,
     sessions: HashMap<SmtcSessionKey, TrackedSmtcSession>,
-    source_to_key: HashMap<MediaSourceId, SmtcSessionKey>,
+    source_to_keys: HashMap<MediaSourceId, HashSet<SmtcSessionKey>>,
     last_events: HashMap<(MediaSourceId, &'static str), Instant>,
 }
 
@@ -121,7 +121,7 @@ impl SmtcWatcherState {
             sink,
             manager_tokens,
             sessions: HashMap::new(),
-            source_to_key: HashMap::new(),
+            source_to_keys: HashMap::new(),
             last_events: HashMap::new(),
         })
     }
@@ -165,25 +165,20 @@ impl SmtcWatcherState {
                 continue;
             };
             
-            let key = SmtcSessionKey::from_source(&source);
+            let key = SmtcSessionKey::from_session(&source, &session);
             observed.insert(key.clone());
 
             if !self.sessions.contains_key(&key) {
-                // SMTC may expose multiple browser sessions that resolve to the same source.
-                // AudioFocus tracks one controllable media source per browser family/profile.
-                if let Some(existing_key) = self.source_to_key.get(&source.id).cloned() {
-                    if existing_key != key {
-                        self.sessions.remove(&existing_key);
-                    }
-                }
-
                 let tracked = TrackedSmtcSession::register(
                     key.clone(),
                     source.clone(),
                     session.clone(),
                     self.sink.clone(),
                 )?;
-                self.source_to_key.insert(source.id.clone(), key.clone());
+                self.source_to_keys
+                    .entry(source.id.clone())
+                    .or_default()
+                    .insert(key.clone());
                 self.sessions.insert(key.clone(), tracked);
                 tracing::info!(
                     source_id = %source.id,
@@ -209,7 +204,12 @@ impl SmtcWatcherState {
 
         for key in stale {
             if let Some(removed) = self.sessions.remove(&key) {
-                self.source_to_key.remove(&removed.source.id);
+                if let Some(keys) = self.source_to_keys.get_mut(&removed.source.id) {
+                    keys.remove(&key);
+                    if keys.is_empty() {
+                        self.source_to_keys.remove(&removed.source.id);
+                    }
+                }
                 self.emit(MediaEvent::MediaStopped {
                     source: removed.source.clone(),
                     metadata: removed.metadata.clone(),
@@ -221,10 +221,9 @@ impl SmtcWatcherState {
     }
 
     fn emit_current_session_changed(&mut self) -> Result<()> {
-        let source = self
-            .manager
-            .GetCurrentSession()
-            .ok()
+        let session = self.manager.GetCurrentSession().ok();
+        let source = session
+            .as_ref()
             .and_then(|session| session.SourceAppUserModelId().ok())
             .map(|aumid| self.resolver.resolve_media_source(&aumid.to_string_lossy()))
             .and_then(|source| self.identity_system.resolve_smtc_source(source));
@@ -304,31 +303,38 @@ impl SmtcWatcherState {
         source_id: MediaSourceId,
         action: TransportAction,
     ) -> Result<TransportResult> {
-        let key = self
-            .source_to_key
+        let keys = self
+            .source_to_keys
             .get(&source_id)
             .cloned()
             .ok_or_else(|| AudioFocusError::Smtc(format!("unknown SMTC source {source_id}")))?;
-        let tracked = self
-            .sessions
-            .get(&key)
-            .ok_or_else(|| AudioFocusError::Smtc(format!("stale SMTC source {source_id}")))?;
 
-        let accepted_by_session = match action {
-            TransportAction::Pause => tracked.session.TryPauseAsync()?.get()?,
-            TransportAction::Play => tracked.session.TryPlayAsync()?.get()?,
-        };
+        let mut all_accepted = true;
+        for key in keys {
+            let Some(tracked) = self.sessions.get(&key) else {
+                continue;
+            };
 
-        tracing::info!(
-            source_id = %source_id,
-            smtc_key = %key,
-            action = ?action,
-            accepted_by_session,
-            "SMTC transport command completed"
-        );
+            let accepted_by_session = match action {
+                TransportAction::Pause => tracked.session.TryPauseAsync()?.get()?,
+                TransportAction::Play => tracked.session.TryPlayAsync()?.get()?,
+            };
+
+            if !accepted_by_session {
+                all_accepted = false;
+            }
+
+            tracing::info!(
+                source_id = %source_id,
+                smtc_key = %key,
+                action = ?action,
+                accepted_by_session,
+                "SMTC transport command completed for session"
+            );
+        }
 
         Ok(TransportResult {
-            accepted_by_session,
+            accepted_by_session: all_accepted,
         })
     }
 

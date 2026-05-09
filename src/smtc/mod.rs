@@ -14,23 +14,20 @@ pub use watcher::SmtcWorkerMessage;
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SmtcSessionKey {
     source_id: MediaSourceId,
-    source_app_user_model_id: String,
+    session_ptr: isize,
 }
 
 impl SmtcSessionKey {
-    pub fn from_source(source: &MediaSource) -> Self {
+    pub fn from_session(source: &MediaSource, session: &windows::Media::Control::GlobalSystemMediaTransportControlsSession) -> Self {
+        use windows::core::Interface;
         Self {
             source_id: source.id.clone(),
-            source_app_user_model_id: source.source_app_user_model_id.clone(),
+            session_ptr: session.as_raw() as isize,
         }
     }
 
     pub fn source_id(&self) -> &MediaSourceId {
         &self.source_id
-    }
-
-    pub fn source_app_user_model_id(&self) -> &str {
-        &self.source_app_user_model_id
     }
 }
 
@@ -38,8 +35,8 @@ impl fmt::Display for SmtcSessionKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{}:{}",
-            self.source_id, self.source_app_user_model_id
+            "{}:{:p}",
+            self.source_id, self.session_ptr as *const ()
         )
     }
 }

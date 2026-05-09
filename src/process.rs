@@ -18,12 +18,9 @@ use windows::{
     },
 };
 
-use crate::{
-    media_source::{
-        normalize_component, BrowserFamily, MediaCapability, MediaSource, MediaSourceId,
-        MediaSourceKind, ProcessIdentity, SourceType,
-    },
-    smtc::SmtcSessionKey,
+use crate::media_source::{
+    normalize_component, BrowserFamily, MediaCapability, MediaSource, MediaSourceId,
+    MediaSourceKind, ProcessIdentity, SourceType,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,11 +62,6 @@ impl ProcessResolver {
             Some(process) => media_source_from_process(source_app_user_model_id, process),
             None => MediaSource::unresolved(source_app_user_model_id.to_string()),
         }
-    }
-
-    pub fn resolve_session_key(&self, source_app_user_model_id: &str) -> SmtcSessionKey {
-        let source = self.resolve_media_source(source_app_user_model_id);
-        SmtcSessionKey::from_source(&source)
     }
 }
 

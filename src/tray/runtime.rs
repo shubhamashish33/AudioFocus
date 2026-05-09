@@ -88,20 +88,21 @@ impl RuntimeHost {
             TrayIconState::Paused
         }
     }
-
-    pub fn open_logs_folder(&self) {
-        let mut path = std::env::current_exe().unwrap();
-        path.pop();
-        path.push("logs");
-        
-        if !path.exists() {
-            let _ = std::fs::create_dir_all(&path);
-        }
-
-        let _ = std::process::Command::new("explorer")
-            .arg(path)
-            .spawn();
+pub fn open_logs_folder(&self) {
+    let path = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("AudioFocus")
+        .join("logs");
+    if !path.exists() {
+        let _ = std::fs::create_dir_all(&path);
     }
+
+    let _ = std::process::Command::new("explorer")
+        .arg(path)
+        .spawn();
+}
+
 
     pub fn run_maintenance(&self) {
         if let Some(runtime) = self.runtime.lock().unwrap().as_ref() {

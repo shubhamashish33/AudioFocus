@@ -49,7 +49,7 @@ impl AudioSessionRegistry {
         for id in next_ids.difference(&previous_ids) {
             if let Some((_, snapshot)) = next.get(id) {
                 events.push(AudioSessionEvent::SessionStarted(snapshot.clone()));
-                if snapshot.is_active() {
+                if snapshot.is_active() && snapshot.is_audible() {
                     events.push(AudioSessionEvent::SessionBecameActive(snapshot.clone()));
                 }
             }
@@ -59,9 +59,12 @@ impl AudioSessionRegistry {
             let previous = &self.sessions_by_id[id].snapshot;
             let (_, current) = &next[id];
 
-            if !previous.is_active() && current.is_active() {
+            let was_playing = previous.is_active() && previous.is_audible();
+            let is_playing = current.is_active() && current.is_audible();
+
+            if !was_playing && is_playing {
                 events.push(AudioSessionEvent::SessionBecameActive(current.clone()));
-            } else if previous.is_active() && !current.is_active() {
+            } else if was_playing && !is_playing {
                 events.push(AudioSessionEvent::SessionBecameInactive(current.clone()));
             }
         }

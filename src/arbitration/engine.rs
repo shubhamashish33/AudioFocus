@@ -93,12 +93,11 @@ impl ControllerRegistry {
             }
         }
 
-        if self.smtc.is_some() && !source.source_app_user_model_id.is_empty() {
-            Some(PauseRoute::Smtc)
-        } else if self.non_smtc.is_some() && source.process.is_some() {
-            Some(PauseRoute::NonSmtc)
-        } else {
-            None
+        match source.source_type {
+            crate::media_source::SourceType::Smtc | crate::media_source::SourceType::Hybrid => {
+                Some(PauseRoute::Smtc)
+            }
+            crate::media_source::SourceType::NonSmtc => Some(PauseRoute::NonSmtc),
         }
     }
 }

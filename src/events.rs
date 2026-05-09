@@ -29,6 +29,8 @@ impl fmt::Display for AudioSessionStateKind {
     }
 }
 
+pub const AUDIO_ACTIVITY_THRESHOLD: f32 = 0.001;
+
 #[derive(Clone, Debug)]
 pub struct AudioSessionSnapshot {
     pub process_id: u32,
@@ -45,6 +47,10 @@ impl AudioSessionSnapshot {
 
     pub fn is_active(&self) -> bool {
         self.state.is_active()
+    }
+
+    pub fn is_audible(&self) -> bool {
+        self.peak > AUDIO_ACTIVITY_THRESHOLD
     }
 }
 
