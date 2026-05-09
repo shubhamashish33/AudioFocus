@@ -85,10 +85,9 @@ fn media_source_from_process(
     };
 
     let id = match &kind {
-        MediaSourceKind::Browser(family) => MediaSourceId::new(format!(
-            "browser:{family}:{}",
-            browser_profile_key(source_app_user_model_id)
-        )),
+        // Bare browser id; SMTC's IdentitySystem path overwrites this with a
+        // per-tab id derived from the SMTC session pointer.
+        MediaSourceKind::Browser(family) => MediaSourceId::new(format!("browser:{family}")),
         MediaSourceKind::StoreApp => MediaSourceId::new(format!(
             "store:{}",
             process
@@ -305,15 +304,6 @@ pub fn browser_family_for_exe(executable_name: &str) -> Option<BrowserFamily> {
         "brave.exe" => Some(BrowserFamily::Brave),
         "firefox.exe" => Some(BrowserFamily::Firefox),
         _ => None,
-    }
-}
-
-fn browser_profile_key(source_app_user_model_id: &str) -> String {
-    let normalized = normalize_component(source_app_user_model_id);
-    if normalized.contains("youtube") {
-        "youtube_music".to_string()
-    } else {
-        "default".to_string()
     }
 }
 

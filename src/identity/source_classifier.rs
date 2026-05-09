@@ -41,7 +41,9 @@ impl SourceClassifier {
     }
 
     fn is_ignored_process(&self, executable_name: &str) -> bool {
+        // "helper" intentionally excluded: many legitimate apps render audio in
+        // helper subprocesses (Slack/Teams/Discord/Electron-based renderers).
         let name = executable_name.to_ascii_lowercase();
-        name.contains("update") || name.contains("helper") || name.contains("crashpad") || name.contains("telemetry") || name.contains("feedback")
+        name.contains("update") || name.contains("crashpad") || name.contains("telemetry") || name.contains("feedback")
     }
 }

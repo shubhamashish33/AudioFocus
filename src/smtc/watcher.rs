@@ -1,10 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    hash::{Hash, Hasher},
     sync::{mpsc, Arc, Weak},
     time::{Duration, Instant},
 };
 
 use windows::{
+    core::Interface,
     Foundation::{EventRegistrationToken, TypedEventHandler},
     Media::Control::{
         CurrentSessionChangedEventArgs, GlobalSystemMediaTransportControlsSession,
@@ -160,11 +162,15 @@ impl SmtcWatcherState {
             let source = self
                 .resolver
                 .resolve_media_source(&source_app_user_model_id);
-            
-            let Some(source) = self.identity_system.resolve_smtc_source(source) else {
+
+            let tab_key = tab_key_from_session(&session);
+            let Some(source) = self
+                .identity_system
+                .resolve_smtc_source(source, Some(&tab_key))
+            else {
                 continue;
             };
-            
+
             let key = SmtcSessionKey::from_session(&source, &session);
             observed.insert(key.clone());
 
@@ -204,11 +210,20 @@ impl SmtcWatcherState {
 
         for key in stale {
             if let Some(removed) = self.sessions.remove(&key) {
+                let mut last_session_for_source = false;
                 if let Some(keys) = self.source_to_keys.get_mut(&removed.source.id) {
                     keys.remove(&key);
                     if keys.is_empty() {
                         self.source_to_keys.remove(&removed.source.id);
+                        last_session_for_source = true;
                     }
+                }
+                if last_session_for_source {
+                    // Per-tab browser sources outlive the SourceRegistry's
+                    // PID-based stale collector (the browser process keeps
+                    // running). Evict here when the last session for the
+                    // source ends so the registry doesn't grow unboundedly.
+                    self.identity_system.registry().remove(&removed.source.id);
                 }
                 self.emit(MediaEvent::MediaStopped {
                     source: removed.source.clone(),
@@ -222,11 +237,13 @@ impl SmtcWatcherState {
 
     fn emit_current_session_changed(&mut self) -> Result<()> {
         let session = self.manager.GetCurrentSession().ok();
-        let source = session
-            .as_ref()
-            .and_then(|session| session.SourceAppUserModelId().ok())
-            .map(|aumid| self.resolver.resolve_media_source(&aumid.to_string_lossy()))
-            .and_then(|source| self.identity_system.resolve_smtc_source(source));
+        let source = session.as_ref().and_then(|session| {
+            let aumid = session.SourceAppUserModelId().ok()?;
+            let resolved = self.resolver.resolve_media_source(&aumid.to_string_lossy());
+            let tab_key = tab_key_from_session(session);
+            self.identity_system
+                .resolve_smtc_source(resolved, Some(&tab_key))
+        });
 
         self.emit(MediaEvent::ActiveSessionChanged { source });
         Ok(())
@@ -516,6 +533,16 @@ impl Drop for WinRtMtaApartment {
             RoUninitialize();
         }
     }
+}
+
+/// Per-session discriminator for browser tab identity. The session pointer is
+/// unique-and-stable for the SMTC session's lifetime; hashing avoids leaking a
+/// raw memory address into the source id while preserving uniqueness.
+fn tab_key_from_session(session: &GlobalSystemMediaTransportControlsSession) -> String {
+    let ptr = session.as_raw() as usize;
+    let mut hasher = DefaultHasher::new();
+    ptr.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
 }
 
 fn log_media_event(event: &MediaEvent) {

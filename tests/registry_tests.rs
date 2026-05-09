@@ -18,7 +18,7 @@ fn emits_start_and_active_for_new_active_process() {
     let mut registry = AudioSessionRegistry::default();
     let events = registry.reconcile(vec![snapshot(42, AudioSessionStateKind::Active)]);
 
-    let names = events.iter().map(|event| event.name()).collect::<Vec<_>>();
+    let names = events.iter().map(|(event, _)| event.name()).collect::<Vec<_>>();
     assert_eq!(names, vec!["SessionStarted", "SessionBecameActive"]);
 }
 
@@ -43,6 +43,6 @@ fn emits_stop_after_confirmed_disappearance() {
     assert!(registry.reconcile(Vec::new()).is_empty());
 
     let events = registry.reconcile(Vec::new());
-    let names = events.iter().map(|event| event.name()).collect::<Vec<_>>();
+    let names = events.iter().map(|(event, _)| event.name()).collect::<Vec<_>>();
     assert_eq!(names, vec!["SessionStopped"]);
 }

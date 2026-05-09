@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::events::{AudioSessionEvent, AudioSessionSnapshot};
-use crate::media_source::MediaSourceId;
 use crate::identity::IdentitySystem;
+use crate::media_source::{MediaSource, MediaSourceId};
 
 const STOP_CONFIRMATION_POLLS: u8 = 3;
 
@@ -11,6 +11,12 @@ const STOP_CONFIRMATION_POLLS: u8 = 3;
 pub struct AudioSessionRegistry {
     identity_system: Arc<IdentitySystem>,
     sessions_by_id: HashMap<MediaSourceId, TrackedAudioSession>,
+}
+
+impl Default for AudioSessionRegistry {
+    fn default() -> Self {
+        Self::new(Arc::new(IdentitySystem::default()))
+    }
 }
 
 impl AudioSessionRegistry {
@@ -24,16 +30,17 @@ impl AudioSessionRegistry {
     pub fn reconcile(
         &mut self,
         snapshots: Vec<AudioSessionSnapshot>,
-    ) -> Vec<AudioSessionEvent> {
-        let mut next = HashMap::with_capacity(snapshots.len());
-        
+    ) -> Vec<(AudioSessionEvent, MediaSource)> {
+        let mut next: HashMap<MediaSourceId, (MediaSource, AudioSessionSnapshot, u8)> =
+            HashMap::with_capacity(snapshots.len());
+
         for snapshot in snapshots {
             if !snapshot.is_live() {
                 continue;
             }
-            
+
             if let Some(source) = self.identity_system.resolve_wasapi_session(&snapshot) {
-                next.insert(source.id.clone(), (source, snapshot));
+                next.insert(source.id.clone(), (source, snapshot, 0));
             }
         }
 
@@ -44,56 +51,74 @@ impl AudioSessionRegistry {
             .collect::<HashSet<MediaSourceId>>();
         let next_ids = next.keys().cloned().collect::<HashSet<MediaSourceId>>();
 
-        let mut events = Vec::new();
+        let mut events: Vec<(AudioSessionEvent, MediaSource)> = Vec::new();
 
         for id in next_ids.difference(&previous_ids) {
-            if let Some((_, snapshot)) = next.get(id) {
-                events.push(AudioSessionEvent::SessionStarted(snapshot.clone()));
+            if let Some((source, snapshot, _)) = next.get(id) {
+                events.push((
+                    AudioSessionEvent::SessionStarted(snapshot.clone()),
+                    source.clone(),
+                ));
                 if snapshot.is_active() && snapshot.is_audible() {
-                    events.push(AudioSessionEvent::SessionBecameActive(snapshot.clone()));
+                    events.push((
+                        AudioSessionEvent::SessionBecameActive(snapshot.clone()),
+                        source.clone(),
+                    ));
                 }
             }
         }
 
         for id in previous_ids.intersection(&next_ids) {
             let previous = &self.sessions_by_id[id].snapshot;
-            let (_, current) = &next[id];
+            let (source, current, _) = &next[id];
 
             let was_playing = previous.is_active() && previous.is_audible();
             let is_playing = current.is_active() && current.is_audible();
 
             if !was_playing && is_playing {
-                events.push(AudioSessionEvent::SessionBecameActive(current.clone()));
+                events.push((
+                    AudioSessionEvent::SessionBecameActive(current.clone()),
+                    source.clone(),
+                ));
             } else if was_playing && !is_playing {
-                events.push(AudioSessionEvent::SessionBecameInactive(current.clone()));
+                events.push((
+                    AudioSessionEvent::SessionBecameInactive(current.clone()),
+                    source.clone(),
+                ));
             }
         }
 
         for id in previous_ids.difference(&next_ids) {
-            if let Some(tracked) = self.sessions_by_id.get_mut(id) {
-                tracked.missing_polls = tracked.missing_polls.saturating_add(1);
-                if tracked.missing_polls >= STOP_CONFIRMATION_POLLS {
-                    events.push(AudioSessionEvent::SessionStopped(tracked.snapshot.clone()));
+            if let Some(tracked) = self.sessions_by_id.get(id) {
+                let bumped = tracked.missing_polls.saturating_add(1);
+                if bumped >= STOP_CONFIRMATION_POLLS {
+                    events.push((
+                        AudioSessionEvent::SessionStopped(tracked.snapshot.clone()),
+                        tracked.source.clone(),
+                    ));
                 } else {
-                    next.insert(id.clone(), (tracked.source.clone(), tracked.snapshot.clone()));
+                    next.insert(
+                        id.clone(),
+                        (tracked.source.clone(), tracked.snapshot.clone(), bumped),
+                    );
                 }
             }
         }
 
         self.sessions_by_id = next
             .into_iter()
-            .map(|(id, (source, snapshot))| {
+            .map(|(id, (source, snapshot, missing_polls))| {
                 (
                     id,
                     TrackedAudioSession {
                         source,
                         snapshot,
-                        missing_polls: 0,
+                        missing_polls,
                     },
                 )
             })
             .collect();
-            
+
         events
     }
 

@@ -126,14 +126,12 @@ fn run_wasapi_worker(
         match monitor.snapshot_sessions() {
             Ok(snapshots) => {
                 let events = registry.reconcile(snapshots);
-                for event in events {
+                for (event, source) in events {
                     log_event(&event);
-                    if let Some(source) = identity_system.resolve_wasapi_session(event.snapshot()) {
-                        if let Some(media_event) = media_event_from_session(&event, source) {
-                            let _ = arbitration.submit(crate::arbitration::ArbitrationEvent::Media(
-                                media_event,
-                            ));
-                        }
+                    if let Some(media_event) = media_event_from_session(&event, source) {
+                        let _ = arbitration.submit(crate::arbitration::ArbitrationEvent::Media(
+                            media_event,
+                        ));
                     }
                 }
                 tracing::debug!(tracked_sessions = registry.len(), "registry reconciled");
