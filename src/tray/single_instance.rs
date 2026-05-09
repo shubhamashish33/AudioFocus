@@ -11,10 +11,9 @@ impl SingleInstance {
         let name_u16: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         let pcwstr = PCWSTR(name_u16.as_ptr());
 
-        // Try to open existing mutex
-        let existing = unsafe { OpenMutexW(MUTEX_ALL_ACCESS, false, pcwstr) };
-        if existing.is_ok() {
-            let _ = unsafe { CloseHandle(existing.unwrap()) };
+        // Try to open existing mutex; if it succeeds, another instance owns it.
+        if let Ok(existing_handle) = unsafe { OpenMutexW(MUTEX_ALL_ACCESS, false, pcwstr) } {
+            let _ = unsafe { CloseHandle(existing_handle) };
             return None;
         }
 

@@ -1,34 +1,33 @@
 use windows::Win32::UI::WindowsAndMessaging::{
-    LoadIconW, HICON, IDI_APPLICATION, IDI_ERROR,
+    LoadIconW, HICON, IDI_APPLICATION,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TrayIconState {
     Active,
     Paused,
-    Error,
 }
 
-pub fn load_state_icon(state: TrayIconState) -> HICON {
-    let instance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default() };
-    
-    match state {
-        // IDI_APPLICATION (32512) is the default resource ID for the icon set in build.rs
-        // We use MAKEINTRESOURCEW(1) essentially.
-        TrayIconState::Active | TrayIconState::Paused => {
-            unsafe { 
-                LoadIconW(instance, windows::core::PCWSTR(1 as *const u16)).unwrap_or_else(|_| {
-                    // Fallback to generic if resource loading fails
-                    LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
-                })
-            }
-        },
-        TrayIconState::Error => {
-            unsafe { LoadIconW(None, IDI_ERROR).unwrap_or_default() }
-        }
+pub fn load_state_icon(_state: TrayIconState) -> HICON {
+    let instance = unsafe {
+        windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default()
+    };
+
+    // The bundled .ico is registered as resource id 1 by build.rs; fall back
+    // to a system icon if resource loading fails. The integer-to-pointer
+    // cast is the MAKEINTRESOURCEW idiom — Win32 interprets the low bits as
+    // a resource id when the high bits are zero, so the "dangling pointer"
+    // clippy flags is intentional and required by the API.
+    #[allow(clippy::manual_dangling_ptr)]
+    let resource = windows::core::PCWSTR(1 as *const u16);
+
+    unsafe {
+        LoadIconW(instance, resource)
+            .or_else(|_| LoadIconW(None, IDI_APPLICATION))
+            .unwrap_or_default()
     }
 }
 
 pub fn free_icon(_icon: HICON) {
-    // Icons loaded with LoadIcon do not need to be freed if they are from resources
+    // LoadIconW returns shared icons that must not be destroyed.
 }

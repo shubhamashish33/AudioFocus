@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -23,7 +23,7 @@ use super::{
     decision::{decide_started, ArbitrationDecision},
     loop_guard::PauseLoopGuard,
     ownership::{mark_pause_observed, mark_paused_by_audiofocus, promote_active, remove_source},
-    state::{ArbitrationSnapshot, ArbitrationState, PauseOrigin, PauseCommandRecord},
+    state::{ArbitrationSnapshot, ArbitrationState, PauseOrigin},
     suppression::SuppressionWindows,
 };
 
@@ -263,7 +263,6 @@ struct ArbitrationWorker {
     suppression: SuppressionWindows,
     loop_guard: PauseLoopGuard,
     recently_promoted: HashMap<MediaSourceId, std::time::Instant>,
-    pending_pause_generations: HashSet<u64>,
 }
 
 impl ArbitrationWorker {
@@ -291,7 +290,6 @@ impl ArbitrationWorker {
             storm_protector: EventStormProtector::new(Duration::from_secs(1), 50),
             state: ArbitrationState::new(),
             recently_promoted: HashMap::new(),
-            pending_pause_generations: HashSet::new(),
         }
     }
 
@@ -512,7 +510,6 @@ impl ArbitrationWorker {
     }
 
     fn handle_pause_completed(&mut self, result: PauseExecutionResult) {
-        self.pending_pause_generations.remove(&result.generation_id);
         match self.state.pending_pauses.remove(&result.generation_id) {
             Some(mut record) if result.success => {
                 record.completed = true;
@@ -580,7 +577,6 @@ impl ArbitrationWorker {
             generation_id,
             rollback_active_on_failure,
         );
-        self.pending_pause_generations.insert(generation_id);
         self.suppression
             .suppress_pause_event(source.id.clone(), generation_id);
 
@@ -617,25 +613,25 @@ impl ArbitrationWorker {
         }
     }
 
-    fn is_oscillation(&mut self, source_id: &MediaSourceId) -> bool {
+    fn prune_recently_promoted(&mut self) {
         let now = std::time::Instant::now();
+        let window = self.config.oscillation_window;
         self.recently_promoted
-            .retain(|_, instant| now.duration_since(*instant) <= self.config.oscillation_window);
-        self.recently_promoted.get(source_id).is_some_and(|instant| {
-            now.duration_since(*instant) <= self.config.oscillation_window
-        })
+            .retain(|_, instant| now.duration_since(*instant) <= window);
+    }
+
+    fn is_oscillation(&mut self, source_id: &MediaSourceId) -> bool {
+        self.prune_recently_promoted();
+        self.recently_promoted.contains_key(source_id)
     }
 
     fn is_simultaneous_conflict(&mut self, source_id: &MediaSourceId) -> bool {
-        let now = std::time::Instant::now();
-        self.recently_promoted
-            .retain(|_, instant| now.duration_since(*instant) <= self.config.oscillation_window);
+        self.prune_recently_promoted();
         self.state
             .currently_active_source
             .as_ref()
             .filter(|active_id| *active_id != source_id)
-            .and_then(|active_id| self.recently_promoted.get(active_id))
-            .is_some_and(|instant| now.duration_since(*instant) <= self.config.oscillation_window)
+            .is_some_and(|active_id| self.recently_promoted.contains_key(active_id))
     }
 
     fn publish_snapshot(&self) {

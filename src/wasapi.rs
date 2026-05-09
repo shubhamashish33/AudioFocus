@@ -165,7 +165,8 @@ fn strongest_state(
         (AudioSessionStateKind::Expired, AudioSessionStateKind::Expired) => {
             AudioSessionStateKind::Expired
         }
-        (AudioSessionStateKind::Unknown(value), _) => AudioSessionStateKind::Unknown(*value),
-        (_, AudioSessionStateKind::Unknown(value)) => AudioSessionStateKind::Unknown(*value),
+        (AudioSessionStateKind::Unknown(value), _) | (_, AudioSessionStateKind::Unknown(value)) => {
+            AudioSessionStateKind::Unknown(*value)
+        }
     }
 }

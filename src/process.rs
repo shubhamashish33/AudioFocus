@@ -69,19 +69,10 @@ fn media_source_from_process(
     source_app_user_model_id: &str,
     process: ProcessSnapshot,
 ) -> MediaSource {
-    let browser_family = browser_family_for_exe(&process.executable_name);
-    let kind = match browser_family.clone() {
+    let kind = match browser_family_for_exe(&process.executable_name) {
         Some(family) => MediaSourceKind::Browser(family),
         None if process.package_full_name.is_some() => MediaSourceKind::StoreApp,
         None => MediaSourceKind::DesktopApp,
-    };
-
-    let capability = match &kind {
-        MediaSourceKind::Browser(_) => MediaCapability::Browser,
-        _ if is_streaming_app(&process.executable_name) => MediaCapability::StreamingApp,
-        _ if is_dedicated_player(&process.executable_name) => MediaCapability::DedicatedPlayer,
-        _ if is_system_process(&process.executable_name) => MediaCapability::System,
-        _ => MediaCapability::Unknown,
     };
 
     let id = match &kind {
@@ -106,11 +97,13 @@ fn media_source_from_process(
         )),
     };
 
+    // Capability is intentionally Unknown here; IdentitySystem.resolve_smtc_source
+    // re-classifies via SourceClassifier so it stays consistent with WASAPI sources.
     MediaSource {
         id,
         kind,
         source_type: SourceType::Smtc,
-        capability,
+        capability: MediaCapability::Unknown,
         source_app_user_model_id: source_app_user_model_id.to_string(),
         process: Some(process.identity()),
     }
@@ -256,20 +249,20 @@ fn process_matches_aumid(process: &ProcessSnapshot, normalized_aumid: &str) -> b
     normalized_aumid.contains(exe.trim_end_matches(".exe"))
         || (!package.is_empty() && normalized_aumid.contains(&package))
         || known_aumid_exe_match(normalized_aumid, &exe)
-        || browser_family_for_exe(&exe).is_some() && browser_aumid(normalized_aumid)
+        || browser_aumid_matches_exe(normalized_aumid, &exe)
         || (!path.is_empty() && normalized_aumid.contains(&exe))
 }
 
 fn process_rank(process: &ProcessSnapshot, normalized_aumid: &str) -> u8 {
     let exe = process.executable_name.to_ascii_lowercase();
-    if known_aumid_exe_match(normalized_aumid, &exe) {
+    if known_aumid_exe_match(normalized_aumid, &exe)
+        || browser_aumid_matches_exe(normalized_aumid, &exe)
+    {
         0
-    } else if browser_family_for_exe(&exe).is_some() && browser_aumid(normalized_aumid) {
-        1
     } else if process.package_full_name.is_some() {
-        2
+        1
     } else {
-        3
+        2
     }
 }
 
@@ -279,22 +272,27 @@ fn known_aumid_exe_match(normalized_aumid: &str, exe: &str) -> bool {
         (aumid, "spotify.exe") if aumid.contains("spotify")
     ) || matches!(
         (normalized_aumid, exe),
-        (aumid, "msedge.exe") if aumid.contains("microsoftedge") || aumid.contains("microsoft.edge") || aumid.contains("edge")
-    ) || matches!(
-        (normalized_aumid, exe),
-        (aumid, "chrome.exe") if aumid.contains("chrome") || aumid.contains("youtube")
-    ) || matches!(
-        (normalized_aumid, exe),
         (aumid, "netflix.exe") if aumid.contains("netflix")
     )
 }
 
-fn browser_aumid(normalized_aumid: &str) -> bool {
-    normalized_aumid.contains("chrome")
-        || normalized_aumid.contains("edge")
-        || normalized_aumid.contains("youtube")
-        || normalized_aumid.contains("brave")
-        || normalized_aumid.contains("firefox")
+/// True only if the browser family of `exe` matches the AUMID hint. Unlike a
+/// generic "any-browser-matches-any-browser-AUMID" fallback, this prevents
+/// e.g. AUMID="Brave" from resolving to chrome.exe when only Chrome is running.
+fn browser_aumid_matches_exe(normalized_aumid: &str, exe: &str) -> bool {
+    match browser_family_for_exe(exe) {
+        Some(BrowserFamily::Chrome) => {
+            normalized_aumid.contains("chrome") || normalized_aumid.contains("youtube")
+        }
+        Some(BrowserFamily::Edge) => {
+            normalized_aumid.contains("edge")
+                || normalized_aumid.contains("microsoftedge")
+                || normalized_aumid.contains("microsoft.edge")
+        }
+        Some(BrowserFamily::Brave) => normalized_aumid.contains("brave"),
+        Some(BrowserFamily::Firefox) => normalized_aumid.contains("firefox"),
+        None => false,
+    }
 }
 
 pub fn browser_family_for_exe(executable_name: &str) -> Option<BrowserFamily> {
@@ -305,21 +303,6 @@ pub fn browser_family_for_exe(executable_name: &str) -> Option<BrowserFamily> {
         "firefox.exe" => Some(BrowserFamily::Firefox),
         _ => None,
     }
-}
-
-fn is_streaming_app(executable_name: &str) -> bool {
-    let name = executable_name.to_ascii_lowercase();
-    name.contains("spotify") || name.contains("netflix") || name.contains("deezer") || name.contains("tidal")
-}
-
-fn is_dedicated_player(executable_name: &str) -> bool {
-    let name = executable_name.to_ascii_lowercase();
-    name.contains("vlc") || name.contains("foobar2000") || name.contains("wmplayer") || name.contains("music.ui")
-}
-
-fn is_system_process(executable_name: &str) -> bool {
-    let name = executable_name.to_ascii_lowercase();
-    matches!(name.as_str(), "audiodg.exe" | "svchost.exe" | "system" | "idle")
 }
 
 fn fixed_utf16_to_string(buffer: &[u16]) -> String {

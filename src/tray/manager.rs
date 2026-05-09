@@ -139,11 +139,12 @@ impl TrayManager {
     }
 
     fn create_nid(&self, hwnd: HWND) -> NOTIFYICONDATAW {
-        let mut nid = NOTIFYICONDATAW::default();
-        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        nid.hWnd = hwnd;
-        nid.uID = 1;
-        nid
+        NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: 1,
+            ..Default::default()
+        }
     }
 }
 

@@ -9,20 +9,17 @@ fn main() -> Result<()> {
     let _logging = logging::init()?;
     
     // Single instance protection
-    let _instance = match SingleInstance::new("AudioFocus_Global_Mutex") {
-        Some(instance) => instance,
-        None => {
-            tracing::warn!("Another instance of AudioFocus is already running. Trying to focus it.");
-            unsafe {
-                let window_class = windows::core::w!("AudioFocusTrayWindow");
-                if let Ok(hwnd) = windows::Win32::UI::WindowsAndMessaging::FindWindowW(window_class, None) {
-                    if !hwnd.0.is_null() {
-                        let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
-                    }
+    let Some(_instance) = SingleInstance::new("AudioFocus_Global_Mutex") else {
+        tracing::warn!("Another instance of AudioFocus is already running. Trying to focus it.");
+        unsafe {
+            let window_class = windows::core::w!("AudioFocusTrayWindow");
+            if let Ok(hwnd) = windows::Win32::UI::WindowsAndMessaging::FindWindowW(window_class, None) {
+                if !hwnd.0.is_null() {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
                 }
             }
-            return Ok(());
         }
+        return Ok(());
     };
 
     tracing::info!(

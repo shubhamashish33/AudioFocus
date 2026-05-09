@@ -11,7 +11,6 @@ pub struct RuntimeHost {
     shutdown: Mutex<Option<ShutdownSignal>>,
     watchdog: Arc<Watchdog>,
     recovery: RecoveryCoordinator,
-    error: Mutex<Option<String>>,
 }
 
 impl Default for RuntimeHost {
@@ -29,7 +28,6 @@ impl RuntimeHost {
             shutdown: Mutex::new(None),
             recovery: RecoveryCoordinator::new(Arc::clone(&watchdog)),
             watchdog,
-            error: Mutex::new(None),
         }
     }
 
@@ -37,12 +35,9 @@ impl RuntimeHost {
         let shutdown = ShutdownSignal::new();
         let runtime = self.monitor.start(shutdown.clone(), Arc::clone(&self.watchdog))?;
 
-        let mut rt_lock = self.runtime.lock().unwrap();
-        let mut sd_lock = self.shutdown.lock().unwrap();
-        
-        *rt_lock = Some(runtime);
-        *sd_lock = Some(shutdown);
-        
+        *self.runtime.lock().unwrap() = Some(runtime);
+        *self.shutdown.lock().unwrap() = Some(shutdown);
+
         tracing::info!("RuntimeHost started AudioFocus service");
         Ok(())
     }
@@ -64,11 +59,11 @@ impl RuntimeHost {
     }
 
     pub fn is_active(&self) -> bool {
-        if let Some(runtime) = self.runtime.lock().unwrap().as_ref() {
-            runtime.arbitration().is_enabled()
-        } else {
-            false
-        }
+        self.runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|runtime| runtime.arbitration().is_enabled())
     }
 
     pub fn toggle_active(&self) {
@@ -80,11 +75,11 @@ impl RuntimeHost {
     }
 
     pub fn is_auto_resume(&self) -> bool {
-        if let Some(runtime) = self.runtime.lock().unwrap().as_ref() {
-            runtime.arbitration().is_auto_resume_enabled()
-        } else {
-            false
-        }
+        self.runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|runtime| runtime.arbitration().is_auto_resume_enabled())
     }
 
     pub fn toggle_auto_resume(&self) {
@@ -96,29 +91,27 @@ impl RuntimeHost {
     }
 
     pub fn state(&self) -> TrayIconState {
-        if self.error.lock().unwrap().is_some() {
-            TrayIconState::Error
-        } else if self.is_active() {
+        if self.is_active() {
             TrayIconState::Active
         } else {
             TrayIconState::Paused
         }
     }
-pub fn open_logs_folder(&self) {
-    let path = std::env::var_os("LOCALAPPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("AudioFocus")
-        .join("logs");
-    if !path.exists() {
-        let _ = std::fs::create_dir_all(&path);
+
+    pub fn open_logs_folder(&self) {
+        let path = std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("AudioFocus")
+            .join("logs");
+        if !path.exists() {
+            let _ = std::fs::create_dir_all(&path);
+        }
+
+        let _ = std::process::Command::new("explorer")
+            .arg(path)
+            .spawn();
     }
-
-    let _ = std::process::Command::new("explorer")
-        .arg(path)
-        .spawn();
-}
-
 
     pub fn run_maintenance(&self) {
         if let Some(runtime) = self.runtime.lock().unwrap().as_ref() {
