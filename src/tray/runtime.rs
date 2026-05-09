@@ -79,6 +79,22 @@ impl RuntimeHost {
         }
     }
 
+    pub fn is_auto_resume(&self) -> bool {
+        if let Some(runtime) = self.runtime.lock().unwrap().as_ref() {
+            runtime.arbitration().is_auto_resume_enabled()
+        } else {
+            false
+        }
+    }
+
+    pub fn toggle_auto_resume(&self) {
+        if let Some(runtime) = self.runtime.lock().unwrap().as_ref() {
+            let next = !runtime.arbitration().is_auto_resume_enabled();
+            runtime.arbitration().set_auto_resume(next);
+            tracing::info!(enabled = next, "Auto-resume toggled via tray");
+        }
+    }
+
     pub fn state(&self) -> TrayIconState {
         if self.error.lock().unwrap().is_some() {
             TrayIconState::Error

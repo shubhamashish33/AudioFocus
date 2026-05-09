@@ -23,7 +23,7 @@ use super::{
     decision::{decide_started, ArbitrationDecision},
     loop_guard::PauseLoopGuard,
     ownership::{mark_pause_observed, mark_paused_by_audiofocus, promote_active, remove_source},
-    state::{ArbitrationSnapshot, ArbitrationState, PauseOrigin},
+    state::{ArbitrationSnapshot, ArbitrationState, PauseOrigin, PauseCommandRecord},
     suppression::SuppressionWindows,
 };
 
@@ -35,6 +35,7 @@ pub struct ArbitrationConfig {
     pub pause_loop_window: Duration,
     pub max_pauses_per_source_per_window: usize,
     pub non_smtc_retry: RetryConfig,
+    pub auto_resume_timeout: Duration,
 }
 
 impl Default for ArbitrationConfig {
@@ -46,6 +47,7 @@ impl Default for ArbitrationConfig {
             pause_loop_window: Duration::from_secs(5),
             max_pauses_per_source_per_window: 4,
             non_smtc_retry: RetryConfig::default(),
+            auto_resume_timeout: Duration::from_secs(300), // 5 minutes
         }
     }
 }
@@ -168,6 +170,7 @@ impl ArbitrationHandle {
 pub struct ArbitrationEngine {
     handle: ArbitrationHandle,
     enabled: Arc<AtomicBool>,
+    auto_resume: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -176,16 +179,25 @@ impl ArbitrationEngine {
         let (sender, receiver) = mpsc::channel();
         let snapshot = Arc::new(Mutex::new(ArbitrationState::new().snapshot()));
         let enabled = Arc::new(AtomicBool::new(true));
+        let auto_resume = Arc::new(AtomicBool::new(true));
         let handle = ArbitrationHandle {
             sender: sender.clone(),
             snapshot: Arc::clone(&snapshot),
         };
 
         let worker_enabled = Arc::clone(&enabled);
+        let worker_auto_resume = Arc::clone(&auto_resume);
         let worker = thread::Builder::new()
             .name("arbitration-engine".to_string())
             .spawn(move || {
-                let mut worker = ArbitrationWorker::new(config, controllers, sender, snapshot, worker_enabled);
+                let mut worker = ArbitrationWorker::new(
+                    config,
+                    controllers,
+                    sender,
+                    snapshot,
+                    worker_enabled,
+                    worker_auto_resume,
+                );
                 worker.run(receiver);
             })
             .map_err(|error| AudioFocusError::Thread(error.to_string()))?;
@@ -193,6 +205,7 @@ impl ArbitrationEngine {
         Ok(Self {
             handle,
             enabled,
+            auto_resume,
             worker: Some(worker),
         })
     }
@@ -207,6 +220,14 @@ impl ArbitrationEngine {
 
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
+    }
+
+    pub fn set_auto_resume(&self, enabled: bool) {
+        self.auto_resume.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn is_auto_resume_enabled(&self) -> bool {
+        self.auto_resume.load(Ordering::SeqCst)
     }
 
     pub fn shutdown(mut self) -> Result<()> {
@@ -235,6 +256,7 @@ struct ArbitrationWorker {
     sender: Sender<ArbitrationMessage>,
     snapshot: Arc<Mutex<ArbitrationSnapshot>>,
     enabled: Arc<AtomicBool>,
+    auto_resume: Arc<AtomicBool>,
     storm_protector: EventStormProtector,
     state: ArbitrationState,
     debounce: DebounceCoordinator,
@@ -251,6 +273,7 @@ impl ArbitrationWorker {
         sender: Sender<ArbitrationMessage>,
         snapshot: Arc<Mutex<ArbitrationSnapshot>>,
         enabled: Arc<AtomicBool>,
+        auto_resume: Arc<AtomicBool>,
     ) -> Self {
         Self {
             debounce: DebounceCoordinator::new(config.duplicate_debounce),
@@ -264,6 +287,7 @@ impl ArbitrationWorker {
             sender,
             snapshot,
             enabled,
+            auto_resume,
             storm_protector: EventStormProtector::new(Duration::from_secs(1), 50),
             state: ArbitrationState::new(),
             recently_promoted: HashMap::new(),
@@ -419,6 +443,7 @@ impl ArbitrationWorker {
                 "arbitration released active ownership"
             );
             self.state.currently_active_source = None;
+            self.maybe_auto_resume(&source.id);
         }
         self.state.push_history(source.id, event_name);
     }
@@ -429,7 +454,61 @@ impl ArbitrationWorker {
             event = event_name,
             "arbitration removed source from ownership state"
         );
+        let was_active = self.state.currently_active_source.as_ref() == Some(&source.id);
         remove_source(&mut self.state, &source.id, event_name);
+        if was_active {
+            self.maybe_auto_resume(&source.id);
+        }
+    }
+
+    fn maybe_auto_resume(&mut self, stopped_source_id: &MediaSourceId) {
+        if !self.auto_resume.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let candidate = self.state.previously_paused_sources.iter()
+            .filter(|(_, record)| {
+                record.completed && 
+                &record.requested_by.id == stopped_source_id &&
+                now.duration_since(record.requested_at) <= self.config.auto_resume_timeout
+            })
+            .max_by_key(|(_, record)| record.requested_at)
+            .map(|(id, _)| id.clone());
+
+        if let Some(id) = candidate {
+            if let Some(record) = self.state.previously_paused_sources.remove(&id) {
+                tracing::info!(
+                    source_id = %id,
+                    stopped_source = %stopped_source_id,
+                    "arbitration triggering auto-resume for previously paused source"
+                );
+                self.request_play(record.paused_source);
+            }
+        }
+    }
+
+    fn request_play(&self, source: MediaSource) {
+        let route = self.controllers.route_for(&source);
+        if let Some(PauseRoute::Smtc) = route {
+            let controllers = self.controllers.clone();
+            let dispatch_source = source.clone();
+            let spawn_result = thread::Builder::new()
+                .name("arbitration-play-dispatch".to_string())
+                .spawn(move || {
+                    if let Some(controller) = controllers.smtc {
+                        let _ = controller.play(dispatch_source.id);
+                    }
+                });
+            if let Err(error) = spawn_result {
+                tracing::error!(%error, "failed to spawn arbitration play dispatch");
+            }
+        } else {
+            tracing::debug!(
+                source_id = %source.id,
+                "auto-resume skipped for non-SMTC source; unreliable background play"
+            );
+        }
     }
 
     fn handle_pause_completed(&mut self, result: PauseExecutionResult) {

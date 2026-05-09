@@ -15,7 +15,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::tray::icons::{free_icon, load_state_icon};
-use crate::tray::menu::{create_tray_menu, IDM_OPEN_LOGS, IDM_QUIT, IDM_RESTART, IDM_TOGGLE_ACTIVE};
+use crate::tray::menu::{
+    create_tray_menu, IDM_OPEN_LOGS, IDM_QUIT, IDM_RESTART, IDM_TOGGLE_ACTIVE, IDM_TOGGLE_AUTO_RESUME,
+};
 use crate::tray::runtime::RuntimeHost;
 
 const WM_TRAY_ICON: u32 = WM_USER + 1;
@@ -196,6 +198,11 @@ unsafe extern "system" fn window_proc(
                         let status = if tm.runtime.is_active() { "Enabled" } else { "Disabled" };
                         tm.show_notification(hwnd, "AudioFocus", &format!("Arbitration is now {}.", status));
                     }
+                    IDM_TOGGLE_AUTO_RESUME => {
+                        tm.runtime.toggle_auto_resume();
+                        let status = if tm.runtime.is_auto_resume() { "Enabled" } else { "Disabled" };
+                        tm.show_notification(hwnd, "AudioFocus", &format!("Auto-Resume is now {}.", status));
+                    }
                     IDM_RESTART => {
                         tm.show_notification(hwnd, "AudioFocus", "Restarting services...");
                         let _ = tm.runtime.restart();
@@ -238,7 +245,7 @@ impl TrayManager {
         let mut pos = Default::default();
         unsafe { let _ = GetCursorPos(&mut pos); };
 
-        let menu = create_tray_menu(self.runtime.is_active());
+        let menu = create_tray_menu(self.runtime.is_active(), self.runtime.is_auto_resume());
         unsafe {
             let _ = SetForegroundWindow(hwnd);
             let _ = TrackPopupMenu(

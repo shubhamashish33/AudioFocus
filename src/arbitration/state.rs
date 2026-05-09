@@ -36,6 +36,7 @@ impl PlaybackRecord {
 pub struct PauseCommandRecord {
     pub paused_source: MediaSource,
     pub requested_by: MediaSource,
+    pub requested_at: Instant,
     pub completed: bool,
     pub rollback_active_on_failure: bool,
 }
