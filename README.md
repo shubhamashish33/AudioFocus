@@ -1,67 +1,56 @@
 # AudioFocus
 
-A production-grade Windows background utility that provides intelligent audio focus orchestration. AudioFocus automatically pauses background media when a new media source starts playing, bringing mobile-like audio focus behavior to Windows 10 and 11.
+![AudioFocus Icon](assets/app_icon.png)
 
-## The Problem
-Windows allows multiple applications to play audio simultaneously without coordination. While some modern apps use the System Media Transport Controls (SMTC), many legacy applications (VLC, MPC-HC, web browsers) do not participate in a unified focus system. This results in "audio overlapping" where users must manually pause one app to hear another.
+**Smart audio coordination for Windows.** AudioFocus automatically manages your music and videos so you never have to manually pause one app to hear another.
 
-## Key Features
-- **Intelligent Arbitration:** Automatically pauses the "losing" media source when a new one starts.
-- **Universal Support:** Works with modern SMTC-enabled apps (Spotify, Netflix, YouTube PWA) and legacy desktop apps (VLC, Foobar2000, MPC-HC).
-- **Stable Identity Tracking:** Tracks applications across audio session recreations, process restarts, and PID reuse.
-- **Zero-Config Tray App:** Runs silently in the tray with minimal CPU/Memory footprint.
-- **Production Hardened:** Built-in watchdog, event storm protection, and automatic subsystem recovery.
+## 🎧 What does AudioFocus do?
 
-## Architecture
+Windows is great, but it has one annoying flaw: it lets every app play sound at the same time. If you're listening to Spotify and click a YouTube link, both will blast audio at you until you manually pause one.
 
-### 1. Monitoring Layer (The Eyes)
-AudioFocus employs a dual-monitoring strategy to capture all media activity:
-- **SMTC Watcher:** Uses the Windows Runtime (WinRT) `GlobalSystemMediaTransportControlsSessionManager` to receive native events from modern apps. It provides rich metadata (Title, Artist) and accurate playback state.
-- **WASAPI Monitor:** Connects to the default audio render endpoint via the Windows Audio Session API. It monitors `IAudioSessionControl2` for session state and uses `IAudioMeterInformation` to detect actual audio peak activity in legacy apps that don't report playback state correctly.
+**AudioFocus fixes this.** It works in the background to ensure only one "active" app is playing at a time.
 
-### 2. Identity System (The Memory)
-Because PIDs and HWNDs are transient, AudioFocus uses a robust identity abstraction:
-- **`MediaSourceId`:** A deterministic, stable string generated from executable paths or Appx package names.
-- **Process Lifetime Tracking:** Uses `GetProcessTimes` (Creation Time) to ensure that if a PID is reused by Windows, the old identity is safely expired and not confused with the new process.
-- **Session Reconciliation:** Automatically merges WASAPI and SMTC streams belonging to the same process into a single logical "Hybrid" source.
+### Key Benefits
+- **Auto-Pause:** Start a video in VLC or Edge, and your background Spotify music pauses instantly.
+- **Smart Hand-back:** Close a temporary video or clip, and your music **automatically resumes** where you left off.
+- **Set & Forget:** No complex setup. Just run it, and it lives silently in your system tray.
+- **Native Experience:** Built specifically for Windows 10 and 11 using high-performance, lightweight technology.
 
-### 3. Arbitration Engine (The Brain)
-The engine processes a stream of media events and maintains a state machine of playback ownership:
-- **Debouncing:** Prevents rapid-fire "MediaStarted" events from causing flickery pauses.
-- **Loop Guard:** Detects and breaks infinite "App A pauses App B -> App B resumes -> App B pauses App A" cycles.
-- **Decision Matrix:** Computes commands (`Promote`, `Switch`, `Reject`) based on source priority and recency.
+---
 
-### 4. Transport Layer (The Hands)
-Executes the engine's decisions:
-- **SMTC Controller:** Sends `TryPauseAsync` commands to WinRT sessions.
-- **Non-SMTC Controller:** Uses `EnumWindows` and `GetWindowThreadProcessId` to find the target app's window and injects a synthesized `WM_APPCOMMAND` (APPCOMMAND_MEDIA_PAUSE) message.
+## 🚀 Getting Started
 
-### 5. Reliability & Hardening
-- **Watchdog:** Monitors worker thread heartbeats; stalls trigger an automatic subsystem restart.
-- **Event Storm Protection:** A sliding-window rate limiter prevents event floods from consuming CPU or causing recursion.
-- **Panic Containment:** All background tasks are wrapped in `catch_unwind` to prevent a single component failure from crashing the entire utility.
+1.  **Download:** Grab the latest `audiofocus.exe`.
+2.  **Run:** Double-click the file. You'll see a small notification and a headphone icon in your system tray.
+3.  **Enjoy:** Start playing any audio. The app handles the rest!
 
-## Production Observations
-- **CPU Usage:** Under 0.1% idle. Process scanning is throttled to a 5-second maintenance timer to minimize wakeups.
-- **Memory:** Fixed-size history buffers and proactive registry pruning ensure a stable memory footprint (typically < 15MB).
-- **Latency:** Switch latency is typically < 200ms, depending on how quickly the target application reacts to `WM_APPCOMMAND`.
+### Tray Options (Right-Click)
+- **Active:** Toggle this to temporarily disable automatic pausing.
+- **Auto-Resume Recently Paused:** If enabled (default), your music will come back to life when you stop watching other videos (within 5 minutes).
+- **Restart:** Refreshes all background services if Windows audio acting up.
+- **Open Logs Folder:** See exactly how the app is making decisions.
 
-## Building from Source
+---
 
-### Prerequisites
-- [Rust](https://rustup.rs/) (Stable MSVC toolchain)
-- Windows 10 or 11 SDK
+## 🛠️ Performance & Privacy
+- **Ultra Lightweight:** Uses almost zero CPU (0.1% or less) and very little memory (<15MB).
+- **Privacy First:** No internet connection required. No data is ever sent to the cloud. All coordination happens locally on your PC.
+- **Stability:** Built-in "Self-Healing" logic detects if Windows audio drivers crash and automatically reconnects to keep things running smoothly.
 
-### Build
+---
+
+## 🏗️ How it's Built (For Developers)
+
+AudioFocus is a professional-grade Rust application that bridges the gap between modern WinRT APIs and legacy Win32 systems:
+- **Universal Monitoring:** Combines SMTC (modern apps) and WASAPI (legacy apps) into a single event stream.
+- **Identity Tracking:** Uses process creation timestamps to uniquely identify apps, preventing "ghost" sessions even if Windows reuses Process IDs.
+- **Arbitration Brain:** A custom state machine with debouncing and loop-protection to prevent "pause-wars" between apps.
+
+### Build from Source
+Requires [Rust](https://rustup.rs/) (Stable MSVC) and Windows 10/11 SDK.
 ```powershell
 cargo build --release
 ```
-The binary will be generated at `target/release/audiofocus.exe`.
-
-## Usage
-- **Launch:** Run `audiofocus.exe`. It will appear in your system tray.
-- **Toggle:** Double-click the tray icon to enable/disable automatic arbitration.
-- **Logs:** Right-click -> "Open Logs Folder" to see structured JSON diagnostics.
 
 ## License
 MIT
