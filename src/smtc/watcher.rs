@@ -6,7 +6,7 @@ use std::{
 };
 
 use windows::{
-    core::Interface,
+    core::{IUnknown, Interface},
     Foundation::{EventRegistrationToken, TypedEventHandler},
     Media::Control::{
         CurrentSessionChangedEventArgs, GlobalSystemMediaTransportControlsSession,
@@ -237,16 +237,28 @@ impl SmtcWatcherState {
 
     fn emit_current_session_changed(&mut self) -> Result<()> {
         let session = self.manager.GetCurrentSession().ok();
-        let source = session.as_ref().and_then(|session| {
-            let aumid = session.SourceAppUserModelId().ok()?;
-            let resolved = self.resolver.resolve_media_source(&aumid.to_string_lossy());
-            let tab_key = tab_key_from_session(session);
-            self.identity_system
-                .resolve_smtc_source(resolved, Some(&tab_key))
-        });
+        // GetCurrentSession() returns a fresh WinRT wrapper whose IInspectable
+        // pointer differs from what GetSessions() handed us — feeding it
+        // through resolve_smtc_source would mint a phantom per-tab source on
+        // every focus change. Match by canonical COM identity (IUnknown) and
+        // reuse the source we already registered. If matching fails, emit a
+        // None source rather than a hallucinated id.
+        let source = session
+            .as_ref()
+            .and_then(|session| self.tracked_source_for(session));
 
         self.emit(MediaEvent::ActiveSessionChanged { source });
         Ok(())
+    }
+
+    fn tracked_source_for(
+        &self,
+        session: &GlobalSystemMediaTransportControlsSession,
+    ) -> Option<MediaSource> {
+        let target = iunknown_id(session)?;
+        self.sessions.values().find_map(|tracked| {
+            (iunknown_id(&tracked.session)? == target).then(|| tracked.source.clone())
+        })
     }
 
     fn refresh_playback_for_key(&mut self, key: &SmtcSessionKey) -> Result<()> {
@@ -543,6 +555,14 @@ fn tab_key_from_session(session: &GlobalSystemMediaTransportControlsSession) -> 
     let mut hasher = DefaultHasher::new();
     ptr.hash(&mut hasher);
     format!("{:x}", hasher.finish())
+}
+
+/// Canonical COM identity for a session. Two `GlobalSystemMediaTransportControlsSession`
+/// wrappers with different `as_raw()` values can still represent the same
+/// underlying object — `QueryInterface(IUnknown)` returns the stable identity
+/// per COM rules.
+fn iunknown_id(session: &GlobalSystemMediaTransportControlsSession) -> Option<isize> {
+    session.cast::<IUnknown>().ok().map(|i| i.as_raw() as isize)
 }
 
 fn log_media_event(event: &MediaEvent) {
