@@ -2,7 +2,8 @@ use std::sync::Arc;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NIF_ICON, NIF_MESSAGE, NIF_TIP,
+    Shell_NotifyIconW, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NIF_ICON,
+    NIF_INFO, NIF_MESSAGE, NIF_TIP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW,
@@ -13,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_OVERLAPPED,
 };
 
-use crate::tray::icons::load_state_icon;
+use crate::tray::icons::{free_icon, load_state_icon};
 use crate::tray::menu::{create_tray_menu, IDM_OPEN_LOGS, IDM_QUIT, IDM_RESTART, IDM_TOGGLE_ACTIVE};
 use crate::tray::runtime::RuntimeHost;
 
@@ -68,6 +69,9 @@ impl TrayManager {
 
         unsafe { SetTimer(hwnd, ID_TIMER_MAINTENANCE, 5000, None) };
         self.add_tray_icon(hwnd);
+        
+        // Startup Notification
+        self.show_notification(hwnd, "AudioFocus Started", "Background audio orchestration is active.");
 
         let mut msg = MSG::default();
         unsafe {
@@ -81,26 +85,48 @@ impl TrayManager {
         Ok(())
     }
 
+    pub fn show_notification(&self, hwnd: HWND, title: &str, message: &str) {
+        let mut nid = self.create_nid(hwnd);
+        nid.uFlags = NIF_INFO;
+        nid.dwInfoFlags = NIIF_INFO;
+        
+        copy_u16_slice(&mut nid.szInfoTitle, title);
+        copy_u16_slice(&mut nid.szInfo, message);
+
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+    }
+
     fn add_tray_icon(&self, hwnd: HWND) {
         let mut nid = self.create_nid(hwnd);
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAY_ICON;
-        nid.hIcon = load_state_icon(self.runtime.state());
+        
+        let icon = load_state_icon(self.runtime.state());
+        nid.hIcon = icon;
         
         copy_u16_slice(&mut nid.szTip, "AudioFocus");
 
         unsafe {
             let _ = Shell_NotifyIconW(NIM_ADD, &nid);
         }
+        
+        free_icon(icon);
     }
 
     fn update_tray_icon(&self, hwnd: HWND) {
         let mut nid = self.create_nid(hwnd);
         nid.uFlags = NIF_ICON;
-        nid.hIcon = load_state_icon(self.runtime.state());
+        
+        let icon = load_state_icon(self.runtime.state());
+        nid.hIcon = icon;
+        
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
         }
+        
+        free_icon(icon);
     }
 
     fn remove_tray_icon(&self, hwnd: HWND) {
@@ -152,6 +178,8 @@ unsafe extern "system" fn window_proc(
                     if let Some(tm) = tray_manager {
                         tm.runtime.toggle_active();
                         tm.update_tray_icon(hwnd);
+                        let status = if tm.runtime.is_active() { "Enabled" } else { "Disabled" };
+                        tm.show_notification(hwnd, "AudioFocus", &format!("Arbitration is now {}.", status));
                     }
                     LRESULT(0)
                 }
@@ -165,8 +193,11 @@ unsafe extern "system" fn window_proc(
                     IDM_TOGGLE_ACTIVE => {
                         tm.runtime.toggle_active();
                         tm.update_tray_icon(hwnd);
+                        let status = if tm.runtime.is_active() { "Enabled" } else { "Disabled" };
+                        tm.show_notification(hwnd, "AudioFocus", &format!("Arbitration is now {}.", status));
                     }
                     IDM_RESTART => {
+                        tm.show_notification(hwnd, "AudioFocus", "Restarting services...");
                         let _ = tm.runtime.restart();
                         tm.update_tray_icon(hwnd);
                     }
@@ -174,6 +205,7 @@ unsafe extern "system" fn window_proc(
                         tm.runtime.open_logs_folder();
                     }
                     IDM_QUIT => {
+                        tm.show_notification(hwnd, "AudioFocus", "Shutting down...");
                         let _ = PostMessageW(hwnd, WM_DESTROY, WPARAM(0), LPARAM(0));
                     }
                     _ => {}

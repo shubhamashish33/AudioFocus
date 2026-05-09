@@ -44,3 +44,5 @@ strip = true
 
 [build-dependencies]
 winres = "0.1"
+image = "0.24"
+ico = "0.3"
