@@ -21,4 +21,7 @@ pub enum AudioFocusError {
 
     #[error("non-SMTC controller error: {0}")]
     NonSmtc(String),
+
+    #[error("Win32 error: {0}")]
+    Win32(String),
 }

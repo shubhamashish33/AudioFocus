@@ -15,6 +15,7 @@ use windows::{
 };
 
 use crate::{
+    arbitration::ArbitrationHandle,
     error::{AudioFocusError, Result},
     identity::IdentitySystem,
     media_events::{MediaEvent, MediaMetadata, PlaybackState},
@@ -52,11 +53,12 @@ pub fn run_smtc_worker(
     sender: mpsc::Sender<SmtcWorkerMessage>,
     receiver: mpsc::Receiver<SmtcWorkerMessage>,
     identity_system: Arc<IdentitySystem>,
+    arbitration: ArbitrationHandle,
 ) -> Result<()> {
     let _apartment = WinRtMtaApartment::initialize()?;
     let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.get()?;
     let sender = Arc::new(SmtcMessageSink::new(sender));
-    let mut state = SmtcWatcherState::new(manager, identity_system, Arc::downgrade(&sender))?;
+    let mut state = SmtcWatcherState::new(manager, identity_system, arbitration, Arc::downgrade(&sender))?;
 
     state.reconcile_sessions()?;
     state.emit_current_session_changed()?;
@@ -91,6 +93,7 @@ impl SmtcMessageSink {
 struct SmtcWatcherState {
     manager: GlobalSystemMediaTransportControlsSessionManager,
     identity_system: Arc<IdentitySystem>,
+    arbitration: ArbitrationHandle,
     resolver: ProcessResolver,
     sink: Weak<SmtcMessageSink>,
     manager_tokens: ManagerEventTokens,
@@ -103,12 +106,14 @@ impl SmtcWatcherState {
     fn new(
         manager: GlobalSystemMediaTransportControlsSessionManager,
         identity_system: Arc<IdentitySystem>,
+        arbitration: ArbitrationHandle,
         sink: Weak<SmtcMessageSink>,
     ) -> Result<Self> {
         let manager_tokens = ManagerEventTokens::register(&manager, sink.clone())?;
         Ok(Self {
             manager,
             identity_system,
+            arbitration,
             resolver: ProcessResolver,
             sink,
             manager_tokens,
@@ -327,6 +332,7 @@ impl SmtcWatcherState {
         }
 
         log_media_event(&event);
+        let _ = self.arbitration.submit(crate::arbitration::ArbitrationEvent::Media(event));
     }
 
     fn is_duplicate(&mut self, event: &MediaEvent) -> bool {

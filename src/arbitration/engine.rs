@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
@@ -166,6 +167,7 @@ impl ArbitrationHandle {
 #[derive(Debug)]
 pub struct ArbitrationEngine {
     handle: ArbitrationHandle,
+    enabled: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -173,27 +175,38 @@ impl ArbitrationEngine {
     pub fn start(config: ArbitrationConfig, controllers: ControllerRegistry) -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let snapshot = Arc::new(Mutex::new(ArbitrationState::new().snapshot()));
+        let enabled = Arc::new(AtomicBool::new(true));
         let handle = ArbitrationHandle {
             sender: sender.clone(),
             snapshot: Arc::clone(&snapshot),
         };
 
+        let worker_enabled = Arc::clone(&enabled);
         let worker = thread::Builder::new()
             .name("arbitration-engine".to_string())
             .spawn(move || {
-                let mut worker = ArbitrationWorker::new(config, controllers, sender, snapshot);
+                let mut worker = ArbitrationWorker::new(config, controllers, sender, snapshot, worker_enabled);
                 worker.run(receiver);
             })
             .map_err(|error| AudioFocusError::Thread(error.to_string()))?;
 
         Ok(Self {
             handle,
+            enabled,
             worker: Some(worker),
         })
     }
 
     pub fn handle(&self) -> ArbitrationHandle {
         self.handle.clone()
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::SeqCst)
     }
 
     pub fn shutdown(mut self) -> Result<()> {
@@ -221,6 +234,7 @@ struct ArbitrationWorker {
     controllers: ControllerRegistry,
     sender: Sender<ArbitrationMessage>,
     snapshot: Arc<Mutex<ArbitrationSnapshot>>,
+    enabled: Arc<AtomicBool>,
     state: ArbitrationState,
     debounce: DebounceCoordinator,
     suppression: SuppressionWindows,
@@ -235,6 +249,7 @@ impl ArbitrationWorker {
         controllers: ControllerRegistry,
         sender: Sender<ArbitrationMessage>,
         snapshot: Arc<Mutex<ArbitrationSnapshot>>,
+        enabled: Arc<AtomicBool>,
     ) -> Self {
         Self {
             debounce: DebounceCoordinator::new(config.duplicate_debounce),
@@ -247,6 +262,7 @@ impl ArbitrationWorker {
             controllers,
             sender,
             snapshot,
+            enabled,
             state: ArbitrationState::new(),
             recently_promoted: HashMap::new(),
             pending_pause_generations: HashSet::new(),
@@ -275,7 +291,11 @@ impl ArbitrationWorker {
 
         match event {
             ArbitrationEvent::Media(MediaEvent::MediaStarted { source, .. }) => {
-                self.handle_media_started(source, generation_id);
+                if self.enabled.load(Ordering::SeqCst) {
+                    self.handle_media_started(source, generation_id);
+                } else {
+                    self.state.upsert_source(source);
+                }
             }
             ArbitrationEvent::Media(MediaEvent::MediaPaused { source, .. }) => {
                 self.handle_media_paused(source, generation_id);
