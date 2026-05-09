@@ -1,6 +1,7 @@
 # AudioFocus
 
-![AudioFocus Icon](assets/app_icon.png)
+<img width="1774" height="887" alt="ChatGPT Image May 9, 2026, 11_02_33 PM" src="https://github.com/user-attachments/assets/01ed2ecf-303c-4ae4-afc9-89a8d07dc618" />
+
 
 **Smart audio coordination for Windows.** AudioFocus automatically manages your music and videos so you never have to manually pause one app to hear another.
 
