@@ -97,6 +97,10 @@ impl AudioSessionRegistry {
         events
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.sessions_by_id.is_empty()
+    }
+
     pub fn len(&self) -> usize {
         self.sessions_by_id.len()
     }

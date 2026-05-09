@@ -60,7 +60,7 @@ impl TrayManager {
             )
         }?;
 
-        if hwnd.0 == std::ptr::null_mut() {
+        if hwnd.0.is_null() {
             return Err(crate::error::AudioFocusError::Win32(
                 "Failed to create tray window".to_string(),
             ));
@@ -208,7 +208,7 @@ impl TrayManager {
 
         let menu = create_tray_menu(self.runtime.is_active());
         unsafe {
-            SetForegroundWindow(hwnd);
+            let _ = SetForegroundWindow(hwnd);
             let _ = TrackPopupMenu(
                 menu,
                 TPM_BOTTOMALIGN | TPM_LEFTALIGN,

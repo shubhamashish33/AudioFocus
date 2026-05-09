@@ -14,7 +14,7 @@ pub struct RankedWindow {
 pub fn ranked_playback_windows(candidates: Vec<WindowCandidate>) -> Vec<RankedWindow> {
     let mut ranked = candidates
         .into_iter()
-        .filter(|candidate| is_valid_playback_window(candidate))
+        .filter(is_valid_playback_window)
         .map(|candidate| {
             let score = playback_window_score(&candidate);
             RankedWindow { candidate, score }
@@ -65,7 +65,7 @@ fn base_window_filter(hwnd: windows::Win32::Foundation::HWND) -> bool {
     }
 
     let owner = unsafe { GetWindow(hwnd, GW_OWNER) }.unwrap_or_default();
-    if owner.0 != std::ptr::null_mut() {
+    if !owner.0.is_null() {
         return false;
     }
 

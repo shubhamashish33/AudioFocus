@@ -22,8 +22,6 @@ pub fn mark_paused_by_audiofocus(
     let record = PauseCommandRecord {
         paused_source: paused_source.clone(),
         requested_by,
-        generation_id,
-        requested_at: Instant::now(),
         completed: false,
         rollback_active_on_failure,
     };

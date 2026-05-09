@@ -10,6 +10,12 @@ pub struct ShutdownSignal {
     requested: Arc<AtomicBool>,
 }
 
+impl Default for ShutdownSignal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShutdownSignal {
     pub fn new() -> Self {
         Self {

@@ -21,7 +21,7 @@ impl EventStormProtector {
         let mut history = self.history.lock().unwrap();
         let now = Instant::now();
         
-        while history.front().map_or(false, |&t| now.duration_since(t) > self.window) {
+        while history.front().is_some_and(|&t| now.duration_since(t) > self.window) {
             history.pop_front();
         }
         

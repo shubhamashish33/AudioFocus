@@ -7,6 +7,12 @@ pub struct SourceRegistry {
     sources: RwLock<HashMap<MediaSourceId, MediaSource>>,
 }
 
+impl Default for SourceRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SourceRegistry {
     pub fn new() -> Self {
         Self {
@@ -31,7 +37,7 @@ impl SourceRegistry {
     pub fn find_by_pid(&self, pid: u32) -> Option<MediaSource> {
         let sources = self.sources.read().ok()?;
         sources.values().find(|source| {
-            source.process.as_ref().map_or(false, |p| p.process_id == pid)
+            source.process.as_ref().is_some_and(|p| p.process_id == pid)
         }).cloned()
     }
 

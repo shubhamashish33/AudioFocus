@@ -16,7 +16,7 @@ fn main() -> Result<()> {
             unsafe {
                 let window_class = windows::core::w!("AudioFocusTrayWindow");
                 if let Ok(hwnd) = windows::Win32::UI::WindowsAndMessaging::FindWindowW(window_class, None) {
-                    if hwnd.0 != std::ptr::null_mut() {
+                    if !hwnd.0.is_null() {
                         let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
                     }
                 }

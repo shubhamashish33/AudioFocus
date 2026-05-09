@@ -16,7 +16,6 @@ pub struct PlaybackRecord {
     pub source: MediaSource,
     pub last_started_at: Option<Instant>,
     pub last_paused_at: Option<Instant>,
-    pub last_stopped_at: Option<Instant>,
     pub last_pause_origin: Option<PauseOrigin>,
     pub generation_id: u64,
 }
@@ -27,7 +26,6 @@ impl PlaybackRecord {
             source,
             last_started_at: None,
             last_paused_at: None,
-            last_stopped_at: None,
             last_pause_origin: None,
             generation_id: 0,
         }
@@ -38,8 +36,6 @@ impl PlaybackRecord {
 pub struct PauseCommandRecord {
     pub paused_source: MediaSource,
     pub requested_by: MediaSource,
-    pub generation_id: u64,
-    pub requested_at: Instant,
     pub completed: bool,
     pub rollback_active_on_failure: bool,
 }

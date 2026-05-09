@@ -13,6 +13,12 @@ pub struct IdentitySystem {
     collector: StaleSourceCollector,
 }
 
+impl Default for IdentitySystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IdentitySystem {
     pub fn new() -> Self {
         let registry = Arc::new(SourceRegistry::new());

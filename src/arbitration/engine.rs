@@ -153,7 +153,7 @@ pub struct ArbitrationHandle {
 impl ArbitrationHandle {
     pub fn submit(&self, event: ArbitrationEvent) -> Result<()> {
         self.sender
-            .send(ArbitrationMessage::Event(event))
+            .send(ArbitrationMessage::Event(Box::new(event)))
             .map_err(|error| AudioFocusError::Thread(error.to_string()))
     }
 
@@ -226,7 +226,7 @@ impl ArbitrationEngine {
 
 #[derive(Clone, Debug)]
 enum ArbitrationMessage {
-    Event(ArbitrationEvent),
+    Event(Box<ArbitrationEvent>),
     Shutdown,
 }
 
@@ -275,7 +275,7 @@ impl ArbitrationWorker {
     fn run(&mut self, receiver: Receiver<ArbitrationMessage>) {
         while let Ok(message) = receiver.recv() {
             match message {
-                ArbitrationMessage::Event(event) => self.handle_event(event),
+                ArbitrationMessage::Event(event) => self.handle_event(*event),
                 ArbitrationMessage::Shutdown => break,
             }
             self.publish_snapshot();
@@ -523,7 +523,7 @@ impl ArbitrationWorker {
                     config,
                 );
                 let _ = sender.send(ArbitrationMessage::Event(
-                    ArbitrationEvent::PauseCompleted(result),
+                    Box::new(ArbitrationEvent::PauseCompleted(result)),
                 ));
             });
         if let Err(error) = spawn_result {

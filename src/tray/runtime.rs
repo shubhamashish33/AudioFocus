@@ -14,6 +14,12 @@ pub struct RuntimeHost {
     error: Mutex<Option<String>>,
 }
 
+impl Default for RuntimeHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuntimeHost {
     pub fn new() -> Self {
         let watchdog = Arc::new(Watchdog::new(Duration::from_secs(10)));
