@@ -1,8 +1,9 @@
-use std::{thread, time::Duration};
+use std::{sync::Arc, thread, time::Duration};
 
 use crate::{
-    com::MtaApartment, error::Result, events::AudioSessionEvent, registry::AudioSessionRegistry,
-    shutdown::ShutdownSignal, smtc::SmtcRuntime, wasapi::WasapiSessionMonitor,
+    com::MtaApartment, error::Result, events::AudioSessionEvent, identity::IdentitySystem,
+    registry::AudioSessionRegistry, shutdown::ShutdownSignal, smtc::SmtcRuntime,
+    wasapi::WasapiSessionMonitor,
 };
 
 #[derive(Debug)]
@@ -18,12 +19,14 @@ impl AudioFocusMonitor {
     pub fn run(&self, shutdown: ShutdownSignal) -> Result<()> {
         let polling_interval = self.polling_interval;
         let worker_shutdown = shutdown.clone();
+        let identity_system = Arc::new(IdentitySystem::new());
 
+        let wasapi_identity = Arc::clone(&identity_system);
         let worker = thread::Builder::new()
             .name("wasapi-session-monitor".to_string())
-            .spawn(move || run_wasapi_worker(worker_shutdown, polling_interval))
+            .spawn(move || run_wasapi_worker(worker_shutdown, polling_interval, wasapi_identity))
             .map_err(|error| crate::error::AudioFocusError::Thread(error.to_string()))?;
-        let smtc_runtime = SmtcRuntime::start(shutdown.clone())?;
+        let smtc_runtime = SmtcRuntime::start(shutdown.clone(), Arc::clone(&identity_system))?;
         let _smtc_controller = smtc_runtime.controller();
 
         while !shutdown.is_requested() {
@@ -37,10 +40,14 @@ impl AudioFocusMonitor {
     }
 }
 
-fn run_wasapi_worker(shutdown: ShutdownSignal, polling_interval: Duration) -> Result<()> {
+fn run_wasapi_worker(
+    shutdown: ShutdownSignal,
+    polling_interval: Duration,
+    identity_system: Arc<IdentitySystem>,
+) -> Result<()> {
     let _com = MtaApartment::initialize()?;
     let mut monitor = WasapiSessionMonitor::from_default_render_endpoint()?;
-    let mut registry = AudioSessionRegistry::default();
+    let mut registry = AudioSessionRegistry::new(identity_system);
 
     while !shutdown.is_requested() {
         match monitor.snapshot_sessions() {

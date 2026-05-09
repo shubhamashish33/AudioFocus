@@ -3,7 +3,7 @@ use std::{mem::size_of, path::PathBuf};
 use windows::{
     core::PWSTR,
     Win32::{
-        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE},
+        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, FILETIME, HANDLE},
         Storage::Packaging::Appx::GetPackageFullName,
         System::{
             Diagnostics::ToolHelp::{
@@ -11,7 +11,7 @@ use windows::{
                 TH32CS_SNAPPROCESS,
             },
             Threading::{
-                OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+                GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
                 PROCESS_QUERY_LIMITED_INFORMATION,
             },
         },
@@ -20,8 +20,8 @@ use windows::{
 
 use crate::{
     media_source::{
-        normalize_component, BrowserFamily, MediaSource, MediaSourceId, MediaSourceKind,
-        ProcessIdentity,
+        normalize_component, BrowserFamily, MediaCapability, MediaSource, MediaSourceId,
+        MediaSourceKind, ProcessIdentity, SourceType,
     },
     smtc::SmtcSessionKey,
 };
@@ -29,6 +29,7 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessSnapshot {
     pub process_id: u32,
+    pub creation_time: u64,
     pub executable_path: Option<PathBuf>,
     pub executable_name: String,
     pub package_full_name: Option<String>,
@@ -38,6 +39,7 @@ impl ProcessSnapshot {
     fn identity(&self) -> ProcessIdentity {
         ProcessIdentity {
             process_id: self.process_id,
+            creation_time: self.creation_time,
             executable_path: self.executable_path.clone(),
             executable_name: self.executable_name.clone(),
             package_full_name: self.package_full_name.clone(),
@@ -82,6 +84,14 @@ fn media_source_from_process(
         None => MediaSourceKind::DesktopApp,
     };
 
+    let capability = match &kind {
+        MediaSourceKind::Browser(_) => MediaCapability::Browser,
+        _ if is_streaming_app(&process.executable_name) => MediaCapability::StreamingApp,
+        _ if is_dedicated_player(&process.executable_name) => MediaCapability::DedicatedPlayer,
+        _ if is_system_process(&process.executable_name) => MediaCapability::System,
+        _ => MediaCapability::Unknown,
+    };
+
     let id = match &kind {
         MediaSourceKind::Browser(family) => MediaSourceId::new(format!(
             "browser:{family}:{}",
@@ -108,6 +118,8 @@ fn media_source_from_process(
     MediaSource {
         id,
         kind,
+        source_type: SourceType::Smtc,
+        capability,
         source_app_user_model_id: source_app_user_model_id.to_string(),
         process: Some(process.identity()),
     }
@@ -145,17 +157,19 @@ fn enumerate_processes() -> Vec<ProcessSnapshot> {
     processes
 }
 
-fn resolve_process(process_id: u32, fallback_name: String) -> ProcessSnapshot {
+pub fn resolve_process(process_id: u32, fallback_name: String) -> ProcessSnapshot {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) };
     let Ok(handle) = handle else {
         return ProcessSnapshot {
             process_id,
+            creation_time: 0,
             executable_path: None,
             executable_name: fallback_name,
             package_full_name: None,
         };
     };
 
+    let creation_time = query_process_creation_time(handle);
     let executable_path = query_process_image_path(handle);
     let package_full_name = query_package_full_name(handle);
     unsafe {
@@ -171,9 +185,33 @@ fn resolve_process(process_id: u32, fallback_name: String) -> ProcessSnapshot {
 
     ProcessSnapshot {
         process_id,
+        creation_time,
         executable_path,
         executable_name,
         package_full_name,
+    }
+}
+
+fn query_process_creation_time(handle: HANDLE) -> u64 {
+    let mut creation_time = FILETIME::default();
+    let mut exit_time = FILETIME::default();
+    let mut kernel_time = FILETIME::default();
+    let mut user_time = FILETIME::default();
+
+    let result = unsafe {
+        GetProcessTimes(
+            handle,
+            &mut creation_time,
+            &mut exit_time,
+            &mut kernel_time,
+            &mut user_time,
+        )
+    };
+
+    if result.is_ok() {
+        ((creation_time.dwHighDateTime as u64) << 32) | (creation_time.dwLowDateTime as u64)
+    } else {
+        0
     }
 }
 
@@ -268,7 +306,7 @@ fn browser_aumid(normalized_aumid: &str) -> bool {
         || normalized_aumid.contains("firefox")
 }
 
-fn browser_family_for_exe(executable_name: &str) -> Option<BrowserFamily> {
+pub fn browser_family_for_exe(executable_name: &str) -> Option<BrowserFamily> {
     match executable_name.to_ascii_lowercase().as_str() {
         "chrome.exe" => Some(BrowserFamily::Chrome),
         "msedge.exe" => Some(BrowserFamily::Edge),
@@ -285,6 +323,21 @@ fn browser_profile_key(source_app_user_model_id: &str) -> String {
     } else {
         "default".to_string()
     }
+}
+
+fn is_streaming_app(executable_name: &str) -> bool {
+    let name = executable_name.to_ascii_lowercase();
+    name.contains("spotify") || name.contains("netflix") || name.contains("deezer") || name.contains("tidal")
+}
+
+fn is_dedicated_player(executable_name: &str) -> bool {
+    let name = executable_name.to_ascii_lowercase();
+    name.contains("vlc") || name.contains("foobar2000") || name.contains("wmplayer") || name.contains("music.ui")
+}
+
+fn is_system_process(executable_name: &str) -> bool {
+    let name = executable_name.to_ascii_lowercase();
+    matches!(name.as_str(), "audiodg.exe" | "svchost.exe" | "system" | "idle")
 }
 
 fn fixed_utf16_to_string(buffer: &[u16]) -> String {

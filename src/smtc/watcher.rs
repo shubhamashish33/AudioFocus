@@ -16,6 +16,7 @@ use windows::{
 
 use crate::{
     error::{AudioFocusError, Result},
+    identity::IdentitySystem,
     media_events::{MediaEvent, MediaMetadata, PlaybackState},
     media_source::{MediaSource, MediaSourceId},
     process::ProcessResolver,
@@ -50,11 +51,12 @@ pub fn run_smtc_worker(
     shutdown: ShutdownSignal,
     sender: mpsc::Sender<SmtcWorkerMessage>,
     receiver: mpsc::Receiver<SmtcWorkerMessage>,
+    identity_system: Arc<IdentitySystem>,
 ) -> Result<()> {
     let _apartment = WinRtMtaApartment::initialize()?;
     let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.get()?;
     let sender = Arc::new(SmtcMessageSink::new(sender));
-    let mut state = SmtcWatcherState::new(manager, ProcessResolver, Arc::downgrade(&sender))?;
+    let mut state = SmtcWatcherState::new(manager, identity_system, Arc::downgrade(&sender))?;
 
     state.reconcile_sessions()?;
     state.emit_current_session_changed()?;
@@ -88,6 +90,7 @@ impl SmtcMessageSink {
 
 struct SmtcWatcherState {
     manager: GlobalSystemMediaTransportControlsSessionManager,
+    identity_system: Arc<IdentitySystem>,
     resolver: ProcessResolver,
     sink: Weak<SmtcMessageSink>,
     manager_tokens: ManagerEventTokens,
@@ -99,13 +102,14 @@ struct SmtcWatcherState {
 impl SmtcWatcherState {
     fn new(
         manager: GlobalSystemMediaTransportControlsSessionManager,
-        resolver: ProcessResolver,
+        identity_system: Arc<IdentitySystem>,
         sink: Weak<SmtcMessageSink>,
     ) -> Result<Self> {
         let manager_tokens = ManagerEventTokens::register(&manager, sink.clone())?;
         Ok(Self {
             manager,
-            resolver,
+            identity_system,
+            resolver: ProcessResolver,
             sink,
             manager_tokens,
             sessions: HashMap::new(),
@@ -148,6 +152,11 @@ impl SmtcWatcherState {
             let source = self
                 .resolver
                 .resolve_media_source(&source_app_user_model_id);
+            
+            let Some(source) = self.identity_system.resolve_smtc_source(source) else {
+                continue;
+            };
+            
             let key = SmtcSessionKey::from_source(&source);
             observed.insert(key.clone());
 
@@ -171,6 +180,8 @@ impl SmtcWatcherState {
                 tracing::info!(
                     source_id = %source.id,
                     source_kind = %source.kind,
+                    source_capability = %source.capability,
+                    source_type = %source.source_type,
                     source_app_user_model_id = %source.source_app_user_model_id,
                     process_id = source.process.as_ref().map(|process| process.process_id),
                     executable_path = source.process.as_ref().and_then(|process| process.executable_path.as_ref()).map(|path| path.display().to_string()),
@@ -207,7 +218,8 @@ impl SmtcWatcherState {
             .GetCurrentSession()
             .ok()
             .and_then(|session| session.SourceAppUserModelId().ok())
-            .map(|aumid| self.resolver.resolve_media_source(&aumid.to_string_lossy()));
+            .map(|aumid| self.resolver.resolve_media_source(&aumid.to_string_lossy()))
+            .and_then(|source| self.identity_system.resolve_smtc_source(source));
 
         self.emit(MediaEvent::ActiveSessionChanged { source });
         Ok(())
@@ -498,6 +510,8 @@ fn log_media_event(event: &MediaEvent) {
                 event = event.name(),
                 source_id = %source.id,
                 source_kind = %source.kind,
+                source_capability = %source.capability,
+                source_type = %source.source_type,
                 source_app_user_model_id = %source.source_app_user_model_id,
                 process_id = source.process.as_ref().map(|process| process.process_id),
                 executable_path = source.process.as_ref().and_then(|process| process.executable_path.as_ref()).map(|path| path.display().to_string()),

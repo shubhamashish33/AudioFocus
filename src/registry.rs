@@ -1,38 +1,53 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::events::{AudioSessionEvent, AudioSessionSnapshot};
+use crate::media_source::MediaSourceId;
+use crate::identity::IdentitySystem;
 
 const STOP_CONFIRMATION_POLLS: u8 = 3;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AudioSessionRegistry {
-    sessions_by_process: HashMap<u32, TrackedAudioSession>,
+    identity_system: Arc<IdentitySystem>,
+    sessions_by_id: HashMap<MediaSourceId, TrackedAudioSession>,
 }
 
 impl AudioSessionRegistry {
+    pub fn new(identity_system: Arc<IdentitySystem>) -> Self {
+        Self {
+            identity_system,
+            sessions_by_id: HashMap::new(),
+        }
+    }
+
     pub fn reconcile(
         &mut self,
-        mut snapshots: Vec<AudioSessionSnapshot>,
+        snapshots: Vec<AudioSessionSnapshot>,
     ) -> Vec<AudioSessionEvent> {
-        snapshots.retain(AudioSessionSnapshot::is_live);
-        snapshots.sort_by_key(|snapshot| snapshot.process_id);
-
         let mut next = HashMap::with_capacity(snapshots.len());
+        
         for snapshot in snapshots {
-            next.insert(snapshot.process_id, snapshot);
+            if !snapshot.is_live() {
+                continue;
+            }
+            
+            if let Some(source) = self.identity_system.resolve_wasapi_session(&snapshot) {
+                next.insert(source.id.clone(), (source, snapshot));
+            }
         }
 
-        let previous_processes = self
-            .sessions_by_process
+        let previous_ids = self
+            .sessions_by_id
             .keys()
-            .copied()
-            .collect::<HashSet<u32>>();
-        let next_processes = next.keys().copied().collect::<HashSet<u32>>();
+            .cloned()
+            .collect::<HashSet<MediaSourceId>>();
+        let next_ids = next.keys().cloned().collect::<HashSet<MediaSourceId>>();
 
         let mut events = Vec::new();
 
-        for process_id in next_processes.difference(&previous_processes) {
-            if let Some(snapshot) = next.get(process_id) {
+        for id in next_ids.difference(&previous_ids) {
+            if let Some((_, snapshot)) = next.get(id) {
                 events.push(AudioSessionEvent::SessionStarted(snapshot.clone()));
                 if snapshot.is_active() {
                     events.push(AudioSessionEvent::SessionBecameActive(snapshot.clone()));
@@ -40,9 +55,9 @@ impl AudioSessionRegistry {
             }
         }
 
-        for process_id in previous_processes.intersection(&next_processes) {
-            let previous = &self.sessions_by_process[process_id].snapshot;
-            let current = &next[process_id];
+        for id in previous_ids.intersection(&next_ids) {
+            let previous = &self.sessions_by_id[id].snapshot;
+            let (_, current) = &next[id];
 
             if !previous.is_active() && current.is_active() {
                 events.push(AudioSessionEvent::SessionBecameActive(current.clone()));
@@ -51,40 +66,45 @@ impl AudioSessionRegistry {
             }
         }
 
-        for process_id in previous_processes.difference(&next_processes) {
-            if let Some(tracked) = self.sessions_by_process.get_mut(process_id) {
+        for id in previous_ids.difference(&next_ids) {
+            if let Some(tracked) = self.sessions_by_id.get_mut(id) {
                 tracked.missing_polls = tracked.missing_polls.saturating_add(1);
                 if tracked.missing_polls >= STOP_CONFIRMATION_POLLS {
                     events.push(AudioSessionEvent::SessionStopped(tracked.snapshot.clone()));
                 } else {
-                    next.insert(*process_id, tracked.snapshot.clone());
+                    next.insert(id.clone(), (tracked.source.clone(), tracked.snapshot.clone()));
                 }
             }
         }
 
-        events.sort_by_key(|event| event.snapshot().process_id);
-        self.sessions_by_process = next
+        self.sessions_by_id = next
             .into_iter()
-            .map(|(process_id, snapshot)| {
+            .map(|(id, (source, snapshot))| {
                 (
-                    process_id,
+                    id,
                     TrackedAudioSession {
+                        source,
                         snapshot,
                         missing_polls: 0,
                     },
                 )
             })
             .collect();
+            
+        // Trigger stale cleanup in identity system
+        self.identity_system.cleanup_stale();
+            
         events
     }
 
     pub fn len(&self) -> usize {
-        self.sessions_by_process.len()
+        self.sessions_by_id.len()
     }
 }
 
 #[derive(Clone, Debug)]
 struct TrackedAudioSession {
+    source: crate::media_source::MediaSource,
     snapshot: AudioSessionSnapshot,
     missing_polls: u8,
 }

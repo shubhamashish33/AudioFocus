@@ -38,6 +38,44 @@ impl fmt::Display for MediaSourceKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum SourceType {
+    Smtc,
+    NonSmtc,
+    Hybrid,
+}
+
+impl fmt::Display for SourceType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Smtc => formatter.write_str("smtc"),
+            Self::NonSmtc => formatter.write_str("non_smtc"),
+            Self::Hybrid => formatter.write_str("hybrid"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum MediaCapability {
+    Browser,
+    DedicatedPlayer,
+    StreamingApp,
+    System,
+    Unknown,
+}
+
+impl fmt::Display for MediaCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Browser => formatter.write_str("browser"),
+            Self::DedicatedPlayer => formatter.write_str("dedicated_player"),
+            Self::StreamingApp => formatter.write_str("streaming_app"),
+            Self::System => formatter.write_str("system"),
+            Self::Unknown => formatter.write_str("unknown"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MediaSourceId(String);
 
@@ -60,6 +98,7 @@ impl fmt::Display for MediaSourceId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessIdentity {
     pub process_id: u32,
+    pub creation_time: u64,
     pub executable_path: Option<PathBuf>,
     pub executable_name: String,
     pub package_full_name: Option<String>,
@@ -69,6 +108,8 @@ pub struct ProcessIdentity {
 pub struct MediaSource {
     pub id: MediaSourceId,
     pub kind: MediaSourceKind,
+    pub source_type: SourceType,
+    pub capability: MediaCapability,
     pub source_app_user_model_id: String,
     pub process: Option<ProcessIdentity>,
 }
@@ -79,6 +120,8 @@ impl MediaSource {
         Self {
             id: MediaSourceId::new(format!("smtc:unresolved:{normalized}")),
             kind: MediaSourceKind::Unknown,
+            source_type: SourceType::Smtc,
+            capability: MediaCapability::Unknown,
             source_app_user_model_id,
             process: None,
         }

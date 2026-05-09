@@ -2,6 +2,7 @@ pub mod arbitration;
 pub mod com;
 pub mod error;
 pub mod events;
+pub mod identity;
 pub mod media_events;
 pub mod media_source;
 pub mod non_smtc;
