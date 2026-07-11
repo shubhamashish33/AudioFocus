@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -111,6 +111,7 @@ pub enum ArbitrationEvent {
     SessionDisconnected { source: MediaSource },
     SourceRemoved { source: MediaSource },
     PauseCompleted(PauseExecutionResult),
+    ResumeCompleted(ResumeExecutionResult),
 }
 
 impl ArbitrationEvent {
@@ -121,6 +122,7 @@ impl ArbitrationEvent {
             Self::SessionDisconnected { .. } => "SessionDisconnected",
             Self::SourceRemoved { .. } => "SourceRemoved",
             Self::PauseCompleted(_) => "PauseCompleted",
+            Self::ResumeCompleted(_) => "ResumeCompleted",
         }
     }
 
@@ -130,7 +132,7 @@ impl ArbitrationEvent {
             Self::SessionInactive { source }
             | Self::SessionDisconnected { source }
             | Self::SourceRemoved { source } => Some(source),
-            Self::PauseCompleted(_) => None,
+            Self::PauseCompleted(_) | Self::ResumeCompleted(_) => None,
         }
     }
 }
@@ -140,6 +142,15 @@ pub struct PauseExecutionResult {
     pub generation_id: u64,
     pub source: MediaSource,
     pub requested_by: MediaSource,
+    pub success: bool,
+    pub route: Option<PauseRoute>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResumeExecutionResult {
+    pub source: MediaSource,
+    pub requested_by: MediaSourceId,
     pub success: bool,
     pub route: Option<PauseRoute>,
     pub error: Option<String>,
@@ -263,6 +274,7 @@ struct ArbitrationWorker {
     suppression: SuppressionWindows,
     loop_guard: PauseLoopGuard,
     recently_promoted: HashMap<MediaSourceId, std::time::Instant>,
+    pending_resumes: HashSet<MediaSourceId>,
 }
 
 impl ArbitrationWorker {
@@ -290,6 +302,7 @@ impl ArbitrationWorker {
             storm_protector: EventStormProtector::new(Duration::from_secs(1), 50),
             state: ArbitrationState::new(),
             recently_promoted: HashMap::new(),
+            pending_resumes: HashSet::new(),
         }
     }
 
@@ -345,6 +358,9 @@ impl ArbitrationWorker {
             ArbitrationEvent::Media(MediaEvent::ActiveSessionChanged { source: None }) => {}
             ArbitrationEvent::PauseCompleted(result) => {
                 self.handle_pause_completed(result);
+            }
+            ArbitrationEvent::ResumeCompleted(result) => {
+                self.handle_resume_completed(result);
             }
         }
     }
@@ -429,7 +445,11 @@ impl ArbitrationWorker {
             generation_id,
             "arbitration observed external pause"
         );
-        mark_pause_observed(&mut self.state, &source.id, PauseOrigin::External);
+        let released_active =
+            mark_pause_observed(&mut self.state, &source.id, PauseOrigin::External);
+        if released_active {
+            self.maybe_auto_resume(&source.id);
+        }
     }
 
     fn handle_inactive(&mut self, source: MediaSource, event_name: &'static str) {
@@ -465,46 +485,81 @@ impl ArbitrationWorker {
         }
 
         let now = std::time::Instant::now();
-        let candidate = self.state.previously_paused_sources.iter()
-            .filter(|(_, record)| {
-                record.completed && 
-                &record.requested_by.id == stopped_source_id &&
-                now.duration_since(record.requested_at) <= self.config.auto_resume_timeout
-            })
-            .max_by_key(|(_, record)| record.requested_at)
-            .map(|(id, _)| id.clone());
+        let candidate = auto_resume_candidate(
+            &self.state,
+            stopped_source_id,
+            now,
+            self.config.auto_resume_timeout,
+        );
 
         if let Some(id) = candidate {
-            if let Some(record) = self.state.previously_paused_sources.remove(&id) {
+            if self.pending_resumes.contains(&id) {
+                return;
+            }
+            if let Some(record) = self.state.previously_paused_sources.get(&id).cloned() {
                 tracing::info!(
                     source_id = %id,
                     stopped_source = %stopped_source_id,
                     "arbitration triggering auto-resume for previously paused source"
                 );
-                self.request_play(record.paused_source);
+                self.request_play(record.paused_source, stopped_source_id.clone());
             }
         }
     }
 
-    fn request_play(&self, source: MediaSource) {
+    fn request_play(&mut self, source: MediaSource, requested_by: MediaSourceId) {
         let route = self.controllers.route_for(&source);
-        if let Some(PauseRoute::Smtc) = route {
-            let controllers = self.controllers.clone();
-            let dispatch_source = source.clone();
-            let spawn_result = thread::Builder::new()
-                .name("arbitration-play-dispatch".to_string())
-                .spawn(move || {
-                    if let Some(controller) = controllers.smtc {
-                        let _ = controller.play(dispatch_source.id);
-                    }
-                });
-            if let Err(error) = spawn_result {
-                tracing::error!(%error, "failed to spawn arbitration play dispatch");
-            }
+        self.pending_resumes.insert(source.id.clone());
+
+        let sender = self.sender.clone();
+        let controllers = self.controllers.clone();
+        let config = self.config.clone();
+        let dispatch_source = source.clone();
+        let dispatch_requested_by = requested_by.clone();
+        let spawn_result = thread::Builder::new()
+            .name("arbitration-play-dispatch".to_string())
+            .spawn(move || {
+                let result = execute_play(
+                    dispatch_source,
+                    dispatch_requested_by,
+                    route,
+                    controllers,
+                    config,
+                );
+                let _ = sender.send(ArbitrationMessage::Event(Box::new(
+                    ArbitrationEvent::ResumeCompleted(result),
+                )));
+            });
+
+        if let Err(error) = spawn_result {
+            self.handle_resume_completed(ResumeExecutionResult {
+                source,
+                requested_by,
+                success: false,
+                route,
+                error: Some(error.to_string()),
+            });
+        }
+    }
+
+    fn handle_resume_completed(&mut self, result: ResumeExecutionResult) {
+        self.pending_resumes.remove(&result.source.id);
+
+        if result.success {
+            consume_resumed_record(&mut self.state, &result.source.id, &result.requested_by);
+            tracing::info!(
+                source_id = %result.source.id,
+                requested_by = %result.requested_by,
+                route = ?result.route,
+                "arbitration auto-resume command succeeded"
+            );
         } else {
-            tracing::debug!(
-                source_id = %source.id,
-                "auto-resume skipped for non-SMTC source; unreliable background play"
+            tracing::error!(
+                source_id = %result.source.id,
+                requested_by = %result.requested_by,
+                route = ?result.route,
+                error = result.error.as_deref(),
+                "arbitration auto-resume command failed; resume record retained"
             );
         }
     }
@@ -596,9 +651,9 @@ impl ArbitrationWorker {
                     controllers,
                     config,
                 );
-                let _ = sender.send(ArbitrationMessage::Event(
-                    Box::new(ArbitrationEvent::PauseCompleted(result)),
-                ));
+                let _ = sender.send(ArbitrationMessage::Event(Box::new(
+                    ArbitrationEvent::PauseCompleted(result),
+                )));
             });
         if let Err(error) = spawn_result {
             tracing::error!(%error, generation_id, "failed to spawn arbitration pause dispatch");
@@ -642,6 +697,99 @@ impl ArbitrationWorker {
     }
 }
 
+fn auto_resume_candidate(
+    state: &ArbitrationState,
+    stopped_source_id: &MediaSourceId,
+    now: std::time::Instant,
+    timeout: Duration,
+) -> Option<MediaSourceId> {
+    state
+        .previously_paused_sources
+        .iter()
+        .filter(|(_, record)| {
+            record.completed
+                && &record.requested_by.id == stopped_source_id
+                && now.duration_since(record.requested_at) <= timeout
+        })
+        .max_by_key(|(_, record)| record.requested_at)
+        .map(|(id, _)| id.clone())
+}
+
+fn consume_resumed_record(
+    state: &mut ArbitrationState,
+    resumed_source_id: &MediaSourceId,
+    requested_by: &MediaSourceId,
+) -> bool {
+    let matching_record = state
+        .previously_paused_sources
+        .get(resumed_source_id)
+        .is_some_and(|record| &record.requested_by.id == requested_by);
+    if matching_record {
+        state.previously_paused_sources.remove(resumed_source_id);
+    }
+    matching_record
+}
+
+fn execute_play(
+    source: MediaSource,
+    requested_by: MediaSourceId,
+    route: Option<PauseRoute>,
+    controllers: ControllerRegistry,
+    config: ArbitrationConfig,
+) -> ResumeExecutionResult {
+    let outcome = match route {
+        Some(PauseRoute::Smtc) => {
+            let Some(controller) = controllers.smtc else {
+                return ResumeExecutionResult {
+                    source,
+                    requested_by,
+                    success: false,
+                    route,
+                    error: Some("SMTC controller unavailable".to_string()),
+                };
+            };
+            match controller.play(source.id.clone()) {
+                Ok(result) if result.accepted_by_session => (true, None),
+                Ok(_) => (
+                    false,
+                    Some("SMTC session rejected play command".to_string()),
+                ),
+                Err(error) => (false, Some(error.to_string())),
+            }
+        }
+        Some(PauseRoute::NonSmtc) => {
+            let Some(controller) = controllers.non_smtc else {
+                return ResumeExecutionResult {
+                    source,
+                    requested_by,
+                    success: false,
+                    route,
+                    error: Some("non-SMTC controller unavailable".to_string()),
+                };
+            };
+            match controller.play(source.clone(), config.non_smtc_retry) {
+                Ok(receiver) => match receiver.recv() {
+                    Ok(result) => (result.success, result.last_error),
+                    Err(error) => (false, Some(error.to_string())),
+                },
+                Err(error) => (false, Some(error.to_string())),
+            }
+        }
+        None => (
+            false,
+            Some("no play controller route available".to_string()),
+        ),
+    };
+
+    ResumeExecutionResult {
+        source,
+        requested_by,
+        success: outcome.0,
+        route,
+        error: outcome.1,
+    }
+}
+
 fn execute_pause(
     generation_id: u64,
     source: MediaSource,
@@ -651,7 +799,9 @@ fn execute_pause(
     config: ArbitrationConfig,
 ) -> PauseExecutionResult {
     match route {
-        Some(PauseRoute::Smtc) => execute_smtc_pause(generation_id, source, requested_by, controllers),
+        Some(PauseRoute::Smtc) => {
+            execute_smtc_pause(generation_id, source, requested_by, controllers)
+        }
         Some(PauseRoute::NonSmtc) => {
             execute_non_smtc_pause(generation_id, source, requested_by, controllers, config)
         }
@@ -749,5 +899,145 @@ fn execute_non_smtc_pause(
             route: Some(PauseRoute::NonSmtc),
             error: Some(error.to_string()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::media_source::{MediaCapability, MediaSourceKind, ProcessIdentity, SourceType};
+
+    use super::*;
+
+    fn source(id: &str) -> MediaSource {
+        MediaSource {
+            id: MediaSourceId::new(id),
+            kind: MediaSourceKind::DesktopApp,
+            source_type: SourceType::NonSmtc,
+            capability: MediaCapability::Unknown,
+            source_app_user_model_id: id.to_string(),
+            process: Some(ProcessIdentity {
+                process_id: 42,
+                creation_time: 1,
+                executable_path: Some(PathBuf::from(format!("C:/Apps/{id}.exe"))),
+                executable_name: format!("{id}.exe"),
+                package_full_name: None,
+            }),
+        }
+    }
+
+    fn completed_pause(
+        state: &mut ArbitrationState,
+        paused: MediaSource,
+        requested_by: MediaSource,
+        generation_id: u64,
+    ) {
+        mark_paused_by_audiofocus(state, paused.clone(), requested_by, generation_id, true);
+        state
+            .previously_paused_sources
+            .get_mut(&paused.id)
+            .expect("pause record")
+            .completed = true;
+    }
+
+    #[test]
+    fn auto_resume_selects_source_paused_by_stopped_owner() {
+        let mut state = ArbitrationState::new();
+        let music = source("music");
+        let browser = source("browser");
+        completed_pause(&mut state, music.clone(), browser.clone(), 1);
+
+        let candidate = auto_resume_candidate(
+            &state,
+            &browser.id,
+            std::time::Instant::now(),
+            Duration::from_secs(300),
+        );
+
+        assert_eq!(candidate, Some(music.id));
+    }
+
+    #[test]
+    fn auto_resume_rejects_pause_requested_by_another_source() {
+        let mut state = ArbitrationState::new();
+        let music = source("music");
+        let browser = source("browser");
+        completed_pause(&mut state, music, source("other"), 1);
+
+        let candidate = auto_resume_candidate(
+            &state,
+            &browser.id,
+            std::time::Instant::now(),
+            Duration::from_secs(300),
+        );
+
+        assert_eq!(candidate, None);
+    }
+
+    #[test]
+    fn auto_resume_requires_completed_pause_command() {
+        let mut state = ArbitrationState::new();
+        let music = source("music");
+        let browser = source("browser");
+        mark_paused_by_audiofocus(&mut state, music, browser.clone(), 1, true);
+
+        let candidate = auto_resume_candidate(
+            &state,
+            &browser.id,
+            std::time::Instant::now(),
+            Duration::from_secs(300),
+        );
+
+        assert_eq!(candidate, None);
+    }
+
+    #[test]
+    fn auto_resume_rejects_expired_pause_record() {
+        let mut state = ArbitrationState::new();
+        let music = source("music");
+        let browser = source("browser");
+        completed_pause(&mut state, music, browser.clone(), 1);
+
+        let candidate = auto_resume_candidate(
+            &state,
+            &browser.id,
+            std::time::Instant::now() + Duration::from_secs(301),
+            Duration::from_secs(300),
+        );
+
+        assert_eq!(candidate, None);
+    }
+
+    #[test]
+    fn successful_resume_consumes_only_matching_pause_record() {
+        let mut state = ArbitrationState::new();
+        let music = source("music");
+        let browser = source("browser");
+        completed_pause(&mut state, music.clone(), browser.clone(), 1);
+
+        assert!(!consume_resumed_record(
+            &mut state,
+            &music.id,
+            &MediaSourceId::new("other")
+        ));
+        assert!(state.previously_paused_sources.contains_key(&music.id));
+
+        assert!(consume_resumed_record(&mut state, &music.id, &browser.id));
+        assert!(!state.previously_paused_sources.contains_key(&music.id));
+    }
+
+    #[test]
+    fn external_pause_reports_active_ownership_release() {
+        let mut state = ArbitrationState::new();
+        let browser = source("browser");
+        promote_active(&mut state, browser.clone(), 1);
+
+        assert!(mark_pause_observed(
+            &mut state,
+            &browser.id,
+            PauseOrigin::External
+        ));
+        assert_eq!(state.currently_active_source, None);
     }
 }

@@ -1,6 +1,6 @@
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetWindow, GetWindowLongPtrW, IsIconic, IsWindow, IsWindowVisible, GA_ROOT,
-    GWL_EXSTYLE, GWL_STYLE, GW_OWNER, WS_CHILD, WS_EX_TOOLWINDOW, WS_VISIBLE,
+    GetAncestor, GetWindow, GetWindowLongPtrW, IsWindow, IsWindowVisible, GA_ROOT, GWL_EXSTYLE,
+    GWL_STYLE, GW_OWNER, WS_CHILD, WS_EX_TOOLWINDOW, WS_VISIBLE,
 };
 
 use super::window_discovery::{WindowCandidate, WindowHandle};
@@ -72,10 +72,7 @@ fn base_window_filter(hwnd: windows::Win32::Foundation::HWND) -> bool {
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
     let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
 
-    style & WS_VISIBLE.0 != 0
-        && style & WS_CHILD.0 == 0
-        && ex_style & WS_EX_TOOLWINDOW.0 == 0
-        && !unsafe { IsIconic(hwnd) }.as_bool()
+    style & WS_VISIBLE.0 != 0 && style & WS_CHILD.0 == 0 && ex_style & WS_EX_TOOLWINDOW.0 == 0
 }
 
 fn playback_window_score(candidate: &WindowCandidate) -> i32 {
